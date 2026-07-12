@@ -1,0 +1,413 @@
+"""TPS スタイルの3直交断面ビューア (Varian Eclipse 風 UI 慣習)。
+
+- Axial / Coronal / Sagittal の同時表示
+- 世界座標 (X,Y,Z) スライダで全断面同期 + クロスヘア
+- 線量カラーウォッシュ + Eclipse 流アイソドーズライン
+- 構造体カラーオーバーレイ (輪郭/塗りつぶし、個別 ON/OFF)
+- カーソル位置の HU / Physical / EQD2 表示
+- DVH パネル
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import plotly.graph_objects as go
+import pydicom
+import streamlit as st
+from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from dose_io import (  # noqa: E402
+    find_dicom_folder, load_ct, load_rtdose_aligned, list_rtdose_files,
+    load_rtstruct_masks, compute_dvh, eqd2_map,
+)
+from models import model_picker, eqd2_volume  # noqa: E402
+
+ALPHA_BETA_OPTIONS = [1.0, 1.5, 2.0, 3.0, 10.0]
+
+# Eclipse 慣習的なアイソドーズ配色 (高→低 %)
+ISODOSE_LEVELS = [
+    (100, "#ff2020"),
+    (95,  "#ff7700"),
+    (90,  "#ffbb00"),
+    (80,  "#ffff00"),
+    (70,  "#88ff00"),
+    (50,  "#00ffaa"),
+    (30,  "#00aaff"),
+    (10,  "#9966ff"),
+]
+
+# 構造体パレット (順に割り当て)
+ROI_PALETTE = ["#ff00ff", "#ff5555", "#55ff55", "#55ffff",
+               "#ffaa55", "#aa55ff", "#ffff55", "#ffffff"]
+
+WL_PRESETS = {
+    "Soft Tissue (W400/L40)":  (400, 40),
+    "Lung (W1500/L-600)":      (1500, -600),
+    "Bone (W2000/L300)":       (2000, 300),
+    "Brain (W80/L40)":         (80, 40),
+    "Mediastinum (W350/L50)":  (350, 50),
+    "Wide (W2000/L0)":         (2000, 0),
+}
+
+
+# ---------- cached loaders ----------
+@st.cache_resource(show_spinner="CT 読み込み中…")
+def _load_ct():
+    return load_ct(find_dicom_folder())
+
+
+@st.cache_resource(show_spinner=False)
+def _list_rtdose():
+    return [f.name for f in list_rtdose_files(find_dicom_folder())]
+
+
+@st.cache_resource(show_spinner="RTDOSE 読み込み中…")
+def _load_dose(name: str):
+    return load_rtdose_aligned(find_dicom_folder(), _load_ct(), filename=name)
+
+
+@st.cache_resource(show_spinner="RTSTRUCT ラスタライズ中…")
+def _load_masks():
+    return load_rtstruct_masks(find_dicom_folder(), _load_ct())
+
+
+@st.cache_resource(show_spinner=False)
+def _patient_info() -> dict:
+    folder = find_dicom_folder()
+    for f in folder.rglob("*.dcm"):
+        try:
+            d = pydicom.dcmread(f, stop_before_pixels=True)
+            if d.Modality == "CT":
+                return {
+                    "name": str(getattr(d, "PatientName", "")),
+                    "id": str(getattr(d, "PatientID", "")),
+                    "study": str(getattr(d, "StudyDescription", "")),
+                    "manufacturer": str(getattr(d, "Manufacturer", "")),
+                }
+        except Exception:
+            continue
+    return {"name": "", "id": "", "study": "", "manufacturer": ""}
+
+
+# ---------- image helpers ----------
+def hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def window_ct(hu_slice, w, l):
+    lo, hi = l - w / 2, l + w / 2
+    return np.clip((hu_slice - lo) / (hi - lo), 0, 1)
+
+
+def to_rgb(gray_01):
+    return (gray_01[..., None] * 255).astype(np.uint8).repeat(3, axis=-1)
+
+
+def colorize(values_01, cmap_name):
+    from matplotlib import colormaps
+    cmap = colormaps[cmap_name]
+    rgba = cmap(values_01)
+    return (rgba[..., :3] * 255).astype(np.uint8)
+
+
+def slice_outline_2d(mask_2d):
+    if not mask_2d.any():
+        return np.zeros_like(mask_2d)
+    interior = (
+        mask_2d
+        & np.roll(mask_2d, 1, axis=0) & np.roll(mask_2d, -1, axis=0)
+        & np.roll(mask_2d, 1, axis=1) & np.roll(mask_2d, -1, axis=1)
+    )
+    return mask_2d & ~interior
+
+
+def apply_dose_wash(rgb, dose, vmax, threshold, cmap_name, alpha):
+    if vmax <= 0:
+        return rgb
+    norm = np.clip(dose / vmax, 0, 1)
+    dose_rgb = colorize(norm, cmap_name)
+    mask = dose >= threshold
+    a = (mask * alpha)[..., None]
+    return (rgb * (1 - a) + dose_rgb * a).astype(np.uint8)
+
+
+def apply_isodose_lines(rgb, dose, vmax, levels):
+    out = rgb.copy()
+    for pct, color in levels:
+        thresh = vmax * pct / 100.0
+        mask = dose >= thresh
+        outline = slice_outline_2d(mask)
+        if outline.any():
+            out[outline] = hex_to_rgb(color)
+    return out
+
+
+def apply_roi_overlay(rgb, masks_2d_with_colors, mode: str, fill_alpha: float):
+    out = rgb.astype(np.float32)
+    for mask_2d, color in masks_2d_with_colors:
+        c = np.array(hex_to_rgb(color), dtype=np.float32)
+        if mode == "輪郭":
+            outline = slice_outline_2d(mask_2d)
+            if outline.any():
+                out[outline] = c
+        else:  # 塗りつぶし
+            if mask_2d.any():
+                a = (mask_2d * fill_alpha)[..., None]
+                out = out * (1 - a) + c * a
+    return out.astype(np.uint8)
+
+
+def draw_crosshair(rgb, h_col: int, v_row: int, color=(0, 220, 255)):
+    out = rgb.copy()
+    if 0 <= v_row < out.shape[0]:
+        out[v_row, :] = color
+    if 0 <= h_col < out.shape[1]:
+        out[:, h_col] = color
+    return out
+
+
+# ---------- world ↔ index ----------
+def world_to_idx(ct, x_w, y_w, z_w):
+    nx = ct.cols; ny = ct.rows; nz = len(ct.z_positions)
+    x_idx = int(np.clip(round((x_w - ct.origin[0]) / ct.px_x), 0, nx - 1))
+    y_idx = int(np.clip(round((y_w - ct.origin[1]) / ct.px_y), 0, ny - 1))
+    zs = np.array(ct.z_positions)
+    z_idx = int(np.argmin(np.abs(zs - z_w)))
+    return x_idx, y_idx, z_idx
+
+
+# ---------- main ----------
+def main():
+    st.set_page_config(page_title="TPS Viewer", page_icon="🎯", layout="wide")
+    from ui_theme import apply_theme, page_header
+    apply_theme()
+    st.markdown(
+        "<style>div[data-testid='stMetricValue']{font-size:18px;}</style>",
+        unsafe_allow_html=True,
+    )
+    page_header("TPS Viewer — Eclipse 風 3 直交ビュー",
+                "Axial / Coronal / Sagittal を世界座標で同期。アイソドーズ + 構造体 + カーソル線量表示。",
+                badges=["3 直交断面", "isodose 8段", "クロスヘア同期"])
+
+    ct = _load_ct()
+    rd_names = _list_rtdose()
+    if not rd_names:
+        st.error("RTDOSE がありません。")
+        st.stop()
+    structures = _load_masks()
+    info = _patient_info()
+
+    # ===== Sidebar =====
+    g_model, g_params = model_picker()
+    st.sidebar.markdown("### プラン")
+    rd_name = st.sidebar.selectbox("RTDOSE", rd_names)
+    dose = _load_dose(rd_name)
+    physical = dose.dose_gy
+    peak_phys = float(physical.max())
+
+    st.sidebar.markdown("### EQD2")
+    n_fx = st.sidebar.number_input("分割数 n", 1, 100, 28, 1)
+    ab = st.sidebar.selectbox("α/β (Gy)", ALPHA_BETA_OPTIONS,
+                               index=ALPHA_BETA_OPTIONS.index(3.0))
+    show_eqd2 = st.sidebar.radio("線量表示", ["Physical", "EQD2"], horizontal=True)
+    eqd2_vol = eqd2_volume(g_model, physical, int(n_fx), float(ab), g_params)
+    display_vol = eqd2_vol if show_eqd2 == "EQD2" else physical
+    peak_display = float(display_vol.max())
+
+    st.sidebar.markdown("### CT ウィンドウ")
+    wl = st.sidebar.selectbox("プリセット", list(WL_PRESETS.keys()))
+    W, L = WL_PRESETS[wl]
+
+    st.sidebar.markdown("### 線量オーバーレイ")
+    show_wash = st.sidebar.checkbox("カラーウォッシュ", True)
+    cmap = st.sidebar.selectbox("カラーマップ", ["jet", "turbo", "viridis", "plasma", "hot"], 0)
+    wash_alpha = st.sidebar.slider("透明度", 0.0, 1.0, 0.35, 0.05)
+    wash_thresh_pct = st.sidebar.slider("表示閾値 (peak %)", 0, 100, 10, 1)
+    show_isodose = st.sidebar.checkbox("アイソドーズライン", True)
+
+    st.sidebar.markdown("### 構造体")
+    roi_selections: dict[str, str] = {}
+    if structures and structures.rois:
+        for i, name in enumerate(structures.rois.keys()):
+            color = ROI_PALETTE[i % len(ROI_PALETTE)]
+            # default ON: PTV-like or first ROI
+            default = (
+                name.upper() == "ROI"
+                or any(k in name.upper() for k in ("PTV", "GTV", "CTV", "TARGET"))
+                or i == 0
+            )
+            on = st.sidebar.checkbox(name, value=default, key=f"roi_{name}")
+            if on:
+                roi_selections[name] = color
+    roi_mode = st.sidebar.radio("構造体表示", ["輪郭", "塗りつぶし"], horizontal=True)
+    roi_alpha = st.sidebar.slider("塗りつぶし透明度", 0.0, 0.5, 0.18, 0.02)
+
+    # ===== Patient banner =====
+    banner = st.columns([3, 2, 2, 2])
+    banner[0].markdown(
+        f"<div style='background:#15202b; padding:8px 14px; border-left:4px solid #00d4ff;'>"
+        f"<b>Patient:</b> {info['name'] or '?'}  &nbsp;|&nbsp;  "
+        f"<b>ID:</b> {info['id'] or '?'}<br>"
+        f"<small>{info['study']} · {info['manufacturer']}</small></div>",
+        unsafe_allow_html=True,
+    )
+    banner[1].markdown(
+        f"<div style='background:#15202b; padding:8px 14px;'>"
+        f"<b>Plan:</b> {rd_name}<br>"
+        f"<small>Physical peak <b>{peak_phys:.2f} Gy</b></small></div>",
+        unsafe_allow_html=True,
+    )
+    banner[2].markdown(
+        f"<div style='background:#15202b; padding:8px 14px;'>"
+        f"<b>Fractionation:</b> {n_fx} fx<br>"
+        f"<small>d at peak <b>{peak_phys/int(n_fx):.2f} Gy/fx</b></small></div>",
+        unsafe_allow_html=True,
+    )
+    banner[3].markdown(
+        f"<div style='background:#15202b; padding:8px 14px;'>"
+        f"<b>EQD2 peak:</b> {eqd2_vol.max():.2f} Gy<br>"
+        f"<small>α/β = {ab}</small></div>",
+        unsafe_allow_html=True,
+    )
+
+    # ===== World coord controls =====
+    nz, ny, nx = ct.hu.shape
+    x_min = ct.origin[0]; x_max = ct.origin[0] + (nx - 1) * ct.px_x
+    y_min = ct.origin[1]; y_max = ct.origin[1] + (ny - 1) * ct.px_y
+    z_min = float(min(ct.z_positions)); z_max = float(max(ct.z_positions))
+
+    # Default crosshair = dose hotspot
+    if "tps_xyz" not in st.session_state:
+        hz, hy, hx = np.unravel_index(int(physical.argmax()), physical.shape)
+        st.session_state.tps_xyz = (
+            float(ct.origin[0] + hx * ct.px_x),
+            float(ct.origin[1] + hy * ct.px_y),
+            float(ct.z_positions[hz]),
+        )
+
+    st.markdown(
+        "<div style='margin-top:12px;'><b>クロスヘア位置 (世界座標 mm)</b> &nbsp;"
+        "<small>3 つのスライダで全断面同期</small></div>",
+        unsafe_allow_html=True,
+    )
+    cc = st.columns(3)
+    with cc[0]:
+        x_w = st.slider("X", x_min, x_max, st.session_state.tps_xyz[0],
+                         step=float(ct.px_x), key="tps_x")
+    with cc[1]:
+        y_w = st.slider("Y", y_min, y_max, st.session_state.tps_xyz[1],
+                         step=float(ct.px_y), key="tps_y")
+    with cc[2]:
+        z_w = st.slider("Z", z_min, z_max, st.session_state.tps_xyz[2],
+                         step=1.0, key="tps_z")
+    st.session_state.tps_xyz = (x_w, y_w, z_w)
+
+    x_idx, y_idx, z_idx = world_to_idx(ct, x_w, y_w, z_w)
+
+    # ===== Render three orthogonal views =====
+    wash_thresh = peak_display * wash_thresh_pct / 100.0
+    iso_levels = ISODOSE_LEVELS if show_isodose else []
+
+    def render(ct_slice, dose_slice, masks_2d, xhair_h, xhair_v):
+        rgb = to_rgb(window_ct(ct_slice, W, L))
+        if show_wash:
+            rgb = apply_dose_wash(rgb, dose_slice, peak_display,
+                                   wash_thresh, cmap, wash_alpha)
+        if iso_levels:
+            rgb = apply_isodose_lines(rgb, dose_slice, peak_display, iso_levels)
+        if masks_2d:
+            rgb = apply_roi_overlay(rgb, masks_2d, roi_mode, roi_alpha)
+        return draw_crosshair(rgb, xhair_h, xhair_v)
+
+    # Axial: (Y, X), crosshair at (col=x_idx, row=y_idx)
+    ax_img = render(
+        ct.hu[z_idx], display_vol[z_idx],
+        [(structures.rois[n][z_idx], c) for n, c in roi_selections.items()],
+        x_idx, y_idx,
+    )
+    # Coronal: (Z flipped, X), crosshair at (col=x_idx, row=(nz-1)-z_idx)
+    cor_img = render(
+        ct.hu[::-1, y_idx, :], display_vol[::-1, y_idx, :],
+        [(structures.rois[n][::-1, y_idx, :], c) for n, c in roi_selections.items()],
+        x_idx, (nz - 1) - z_idx,
+    )
+    # Sagittal: (Z flipped, Y), crosshair at (col=y_idx, row=(nz-1)-z_idx)
+    sag_img = render(
+        ct.hu[::-1, :, x_idx], display_vol[::-1, :, x_idx],
+        [(structures.rois[n][::-1, :, x_idx], c) for n, c in roi_selections.items()],
+        y_idx, (nz - 1) - z_idx,
+    )
+
+    vcols = st.columns(3)
+    with vcols[0]:
+        st.image(Image.fromarray(ax_img),
+                 caption=f"Axial   Z = {z_w:+.1f} mm   ({z_idx+1}/{nz})",
+                 use_container_width=True)
+    with vcols[1]:
+        st.image(Image.fromarray(cor_img),
+                 caption=f"Coronal   Y = {y_w:+.1f} mm   ({y_idx+1}/{ny})",
+                 use_container_width=True)
+    with vcols[2]:
+        st.image(Image.fromarray(sag_img),
+                 caption=f"Sagittal   X = {x_w:+.1f} mm   ({x_idx+1}/{nx})",
+                 use_container_width=True)
+
+    # ===== Cursor info bar =====
+    hu_at = float(ct.hu[z_idx, y_idx, x_idx])
+    dose_at = float(physical[z_idx, y_idx, x_idx])
+    eqd2_at = float(eqd2_vol[z_idx, y_idx, x_idx])
+
+    ic = st.columns(4)
+    ic[0].metric("HU @ crosshair", f"{hu_at:.0f}")
+    ic[1].metric("Physical @ crosshair", f"{dose_at:.2f} Gy")
+    ic[2].metric(f"EQD2 (n={n_fx}, α/β={ab})", f"{eqd2_at:.2f} Gy",
+                  delta=f"{eqd2_at - dose_at:+.2f} Gy vs Physical")
+    if peak_phys > 0:
+        ic[3].metric("dose / Rx peak", f"{100*dose_at/peak_phys:.1f} %")
+
+    # ===== Isodose legend =====
+    if show_isodose:
+        st.markdown("<b>Isodose</b>", unsafe_allow_html=True)
+        lc = st.columns(len(ISODOSE_LEVELS))
+        for i, (pct, color) in enumerate(ISODOSE_LEVELS):
+            with lc[i]:
+                st.markdown(
+                    f"<div style='background:{color}; padding:6px; text-align:center;"
+                    f" color:#000; border-radius:4px; font-weight:600; font-size:13px;'>"
+                    f"{pct}%<br><span style='font-size:11px;'>{peak_display*pct/100:.1f} Gy</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+    # ===== DVH panel =====
+    if structures and roi_selections:
+        st.markdown("---")
+        st.subheader("DVH")
+        fig = go.Figure()
+        for name, color in roi_selections.items():
+            mask = structures.rois[name]
+            d, v = compute_dvh(physical, mask)
+            fig.add_trace(go.Scatter(
+                x=d, y=v, mode="lines", name=f"{name} Phys",
+                line=dict(color=color, width=2.5),
+            ))
+            d, v = compute_dvh(eqd2_vol, mask)
+            fig.add_trace(go.Scatter(
+                x=d, y=v, mode="lines", name=f"{name} EQD2",
+                line=dict(color=color, width=2, dash="dash"),
+            ))
+        fig.update_layout(
+            xaxis_title="Dose (Gy)", yaxis_title="Volume (%)",
+            yaxis_range=[0, 105], height=380,
+            template="plotly_dark", hovermode="x unified",
+            margin=dict(t=20, b=20, l=20, r=20),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.35),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+if __name__ == "__main__":
+    main()
