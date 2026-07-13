@@ -29,14 +29,22 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
     eqd2 = eqd2_volume(model, physical, int(n_fx), float(ab), params)
 
     c = st.columns([1, 1, 1, 1])
-    show = c[0].radio("線量", ["EQD2", "Physical"], horizontal=True, key="pv_show")
+    show = c[0].radio("線量", ["EQD2", "Physical", "差 (EQD2−Physical)"],
+                      horizontal=True, key="pv_show")
     axis = c[1].selectbox("断面", ["Axial", "Coronal", "Sagittal"], key="pv_axis")
     wl = c[2].selectbox("CT窓", list(viz.WL_PRESETS.keys()), key="pv_wl")
     cmap = c[3].selectbox("カラーマップ", ["jet", "turbo", "viridis", "hot"], key="pv_cmap")
     W, L = viz.WL_PRESETS[wl]
 
-    vol = eqd2 if show == "EQD2" else physical
-    vmax = float(vol.max())
+    divergent = show.startswith("差")
+    if divergent:
+        vol = eqd2 - physical                 # d>2Gy/fxで正(生物学的に増)、d<2で負
+        vmax = float(np.max(np.abs(vol))) or 1e-6
+        active_cmap = "RdBu_r"                 # 青=減, 白=0, 赤=増
+    else:
+        vol = eqd2 if show == "EQD2" else physical
+        vmax = float(vol.max())
+        active_cmap = cmap
     n_slices = viz.slice_count(vol.shape, axis)
     hot = int(np.unravel_index(int(physical.argmax()), physical.shape)[
         {"Axial": 0, "Coronal": 1, "Sagittal": 2}[axis]])
@@ -45,7 +53,8 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
     cc = st.columns([1, 1, 1])
     alpha = cc[0].slider("透明度", 0.0, 1.0, 0.5, 0.05, key="pv_alpha")
     thr_pct = cc[1].slider("表示閾値 (%)", 0, 100, 10, 1, key="pv_thr")
-    iso = cc[2].checkbox("アイソドーズ線", True, key="pv_iso")
+    iso = cc[2].checkbox("アイソドーズ線", not divergent, key="pv_iso",
+                         disabled=divergent)
 
     rois = []
     if structures and structures.rois:
@@ -58,21 +67,34 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
 
     ct_gray = viz.window_ct(viz.take_slice(ct.hu, axis, idx), W, L)
     dose_slice = viz.take_slice(vol, axis, idx)
-    img = viz.overlay(ct_gray, dose_slice, vmax, vmax * thr_pct / 100.0, cmap, alpha)
-    if iso:
+    img = viz.overlay(ct_gray, dose_slice, vmax, vmax * thr_pct / 100.0,
+                      active_cmap, alpha, divergent=divergent)
+    if iso and not divergent:
         img = viz.apply_isodose_lines(img, dose_slice, vmax, viz.ISODOSE_LEVELS)
     if rois:
         img = viz.apply_roi_outlines(img, [(viz.take_slice(m, axis, idx), c) for m, c in rois])
 
     col_img, col_info = st.columns([3, 1])
     with col_img:
-        viz.show_image(img, f"{axis} slice={idx} | {show} (peak {vmax:.1f} Gy)")
-        viz.colorbar(vmax, cmap, label=f"{show}: 0 … {vmax:.1f} Gy")
+        cap = (f"{axis} slice={idx} | 差 EQD2−Physical (±{vmax:.1f} Gy)" if divergent
+               else f"{axis} slice={idx} | {show} (peak {vmax:.1f} Gy)")
+        viz.show_image(img, cap)
+        viz.colorbar(vmax, active_cmap, divergent=divergent,
+                     label=("差 EQD2−Physical (青=減 / 赤=増)" if divergent
+                            else f"{show}: 0 … {vmax:.1f} Gy"))
     with col_info:
         st.metric("Physical peak", f"{physical.max():.2f} Gy")
         st.metric("d at peak", f"{physical.max()/int(n_fx):.2f} Gy/fx")
         st.metric("EQD2 peak", f"{eqd2.max():.2f} Gy")
-        st.metric("増分 (EQD2/Phys)", f"×{eqd2.max()/max(physical.max(),1e-6):.2f}")
+        if divergent:
+            diff = eqd2 - physical
+            st.metric("差 最大 (増)", f"{float(diff.max()):+.2f} Gy")
+            st.metric("差 最小 (減)", f"{float(diff.min()):+.2f} Gy")
+        else:
+            st.metric("増分 (EQD2/Phys)", f"×{eqd2.max()/max(physical.max(),1e-6):.2f}")
+        if divergent:
+            st.caption("赤=EQD2がPhysicalより高い(d>2Gy/fx、寡分割の生物学的増分)。"
+                       "青=低い(d<2Gy/fx)。d=2Gy/fxで0。")
 
 
 def tab_dvh(dose, structures, model, params, n_fx, ab):
