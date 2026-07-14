@@ -160,8 +160,6 @@ def tab_ab_uncertainty(ct, dose, structures):
 
 
 def main():
-    st.set_page_config(page_title="モデル・不確実性", page_icon="🔬", layout="wide")
-    apply_theme()
     page_header("モデル・不確実性 — QA / 教育",
                 "モデル選択と α/β の感度を検討。臨床判断ではなく「選択が結論をどれだけ動かすか」を確認。",
                 badges=["4モデル voxel 比較", "α/β worst-case", "ReCOG 2024 課題"])
@@ -183,5 +181,4 @@ def main():
         tab_ab_uncertainty(ct, dose, structures)
 
 
-if __name__ == "__main__":
-    main()
+main()

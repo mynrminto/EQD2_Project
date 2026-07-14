@@ -182,16 +182,13 @@ def world_to_idx(ct, x_w, y_w, z_w):
 
 # ---------- main ----------
 def main():
-    st.set_page_config(page_title="TPS Viewer", page_icon="🎯", layout="wide")
-    from ui_theme import apply_theme, page_header
-    apply_theme()
+    from ui_theme import page_header
     st.markdown(
         "<style>div[data-testid='stMetricValue']{font-size:18px;}</style>",
         unsafe_allow_html=True,
     )
-    page_header("TPS Viewer — Eclipse 風 3 直交ビュー",
-                "Axial / Coronal / Sagittal を世界座標で同期。アイソドーズ + 構造体 + カーソル線量表示。",
-                badges=["3 直交断面", "isodose 8段", "クロスヘア同期"])
+    page_header("画像ビューア — Eclipse 風 3 直交ビュー",
+                "Axial / Coronal / Sagittal を世界座標で同期。アイソドーズ + 構造体 + カーソル線量表示。")
 
     ct = _load_ct()
     rd_names = _list_rtdose()
@@ -409,5 +406,4 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
 
 
-if __name__ == "__main__":
-    main()
+main()

@@ -163,8 +163,6 @@ def tab_contribution(ct, structures, rd_names, model, params, ab):
 
 
 def main():
-    st.set_page_config(page_title="再照射", page_icon="🔁", layout="wide")
-    apply_theme()
     page_header("再照射 — 累積 EQD2 + コース寄与",
                 "複数プランを EQD2 空間で加算 (recovery 込み)。コース寄与で説明可能な評価。",
                 badges=["複数プラン", "recovery factor", "Course contribution ★", "累積 DVH"])
@@ -198,5 +196,4 @@ def main():
         """)
 
 
-if __name__ == "__main__":
-    main()
+main()

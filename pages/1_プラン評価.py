@@ -166,8 +166,6 @@ def tab_roi_ab(dose, structures, model, params, n_fx):
 
 
 def main():
-    st.set_page_config(page_title="プラン評価", page_icon="🩻", layout="wide")
-    apply_theme()
     page_header("プラン評価 — 画像 + DVH + 構造別α/β",
                 "1つのプランを画像・DVH・構造別評価で総合レビュー。",
                 badges=["単一プラン", "EQD2 オーバーレイ", "DVH", "構造別 α/β"])
@@ -198,5 +196,4 @@ def main():
         tab_roi_ab(dose, structures, model, params, n_fx)
 
 
-if __name__ == "__main__":
-    main()
+main()
