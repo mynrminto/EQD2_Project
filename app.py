@@ -30,7 +30,7 @@ def default_plans():
 
 
 def render_plan_sidebar():
-    st.sidebar.markdown("### 📋 プラン入力")
+    st.sidebar.markdown("### プラン入力")
     st.sidebar.caption("処方を入力するとリアルタイムで再計算。")
     for i, plan in enumerate(st.session_state.plans):
         with st.sidebar.expander(plan["name"], expanded=(i == 0)):
@@ -169,7 +169,7 @@ def tab_iso(model, params):
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                           margin=dict(t=46, b=20, l=20, r=20))
         st.plotly_chart(fig, use_container_width=True)
-    st.download_button("📄 CSV ダウンロード", df.to_csv(index=False).encode("utf-8-sig"),
+    st.download_button("CSV ダウンロード", df.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"iso_eqd2_{int(target)}Gy.csv", mime="text/csv")
 
 
@@ -185,7 +185,7 @@ def main():
     model, params = model_picker()
     render_plan_sidebar()
 
-    t1, t2, t3 = st.tabs(["📊 計算 & グラフ", "🔬 4モデル比較", "📋 等EQD2線量表"])
+    t1, t2, t3 = st.tabs(["計算 & グラフ", "4モデル比較", "等EQD2線量表"])
     with t1:
         tab_calc(model, params)
     with t2:

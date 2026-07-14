@@ -179,7 +179,7 @@ def main():
         st.stop()
 
     model, params = model_picker()
-    st.sidebar.markdown("### 📋 プラン")
+    st.sidebar.markdown("### プラン")
     rd_name = st.sidebar.selectbox("RTDOSE", rd_names)
     n_fx = st.sidebar.number_input("分割数 n", 1, 100, 20, 1)
     ab = st.sidebar.selectbox("DVH 用 α/β (Gy)", ALPHA_BETA_OPTIONS,
@@ -189,7 +189,7 @@ def main():
     structures = viz.get_masks()
     st.caption(f"RTDOSE: {rd_name} | peak {dose.dose_gy.max():.1f} Gy | モデル: {model}")
 
-    t1, t2, t3 = st.tabs(["🖼 画像オーバーレイ", "📈 DVH", "🧬 構造別 α/β"])
+    t1, t2, t3 = st.tabs(["画像オーバーレイ", "DVH", "構造別 α/β"])
     with t1:
         tab_image(ct, dose, structures, model, params, n_fx, ab)
     with t2:

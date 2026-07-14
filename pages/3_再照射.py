@@ -184,7 +184,7 @@ def main():
     structures = viz.get_masks()
     st.caption(f"モデル: {model} | 加算 α/β: {ab}")
 
-    t1, t2 = st.tabs(["📊 累積評価", "🎯 コース寄与マップ"])
+    t1, t2 = st.tabs(["累積評価", "コース寄与マップ"])
     with t1:
         tab_cumulative(ct, structures, rd_names, model, params, ab)
     with t2:

@@ -89,7 +89,7 @@ def model_picker(container=None, key_prefix: str = "global") -> tuple[str, dict]
     返り値: (model, params)
     """
     c = container if container is not None else st.sidebar
-    c.markdown("### 🧬 生物学的モデル")
+    c.markdown("### 生物学的モデル")
 
     if "model" not in st.session_state:
         st.session_state.model = MODELS[0]

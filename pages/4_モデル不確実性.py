@@ -176,7 +176,7 @@ def main():
     structures = viz.get_masks()
     st.caption(f"RTDOSE: {rd_name} | peak {dose.dose_gy.max():.1f} Gy")
 
-    t1, t2 = st.tabs(["🔬 4モデル voxel 比較", "📐 α/β 不確実性 (worst-case)"])
+    t1, t2 = st.tabs(["4モデル voxel 比較", "α/β 不確実性 (worst-case)"])
     with t1:
         tab_model_compare(ct, dose, structures)
     with t2:
