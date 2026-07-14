@@ -14,12 +14,18 @@ st.set_page_config(page_title="EQD2 Suite", page_icon="🎯", layout="wide")
 apply_theme()
 
 pages = [
-    st.Page("views/home.py", title="TOP", icon=":material/home:", default=True),
-    st.Page("views/calculator.py", title="計算機", icon=":material/calculate:"),
-    st.Page("pages/1_プラン評価.py", title="プラン評価", icon=":material/dashboard:"),
-    st.Page("pages/2_画像ビューア.py", title="画像ビューア", icon=":material/imagesmode:"),
-    st.Page("pages/3_再照射.py", title="再照射", icon=":material/replay:"),
-    st.Page("pages/4_モデル不確実性.py", title="モデル・不確実性", icon=":material/science:"),
+    st.Page("views/home.py", title="TOP", icon=":material/home:",
+            url_path="home", default=True),
+    st.Page("views/calculator.py", title="計算機", icon=":material/calculate:",
+            url_path="calculator"),
+    st.Page("pages/1_plan_review.py", title="プラン評価", icon=":material/dashboard:",
+            url_path="plan_review"),
+    st.Page("pages/2_image_viewer.py", title="画像ビューア", icon=":material/imagesmode:",
+            url_path="image_viewer"),
+    st.Page("pages/3_reirradiation.py", title="再照射", icon=":material/replay:",
+            url_path="reirradiation"),
+    st.Page("pages/4_model_lab.py", title="モデル・不確実性", icon=":material/science:",
+            url_path="model_lab"),
 ]
 
 st.navigation(pages).run()
