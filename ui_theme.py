@@ -33,62 +33,59 @@ MODEL_COLORS = {
 
 
 def apply_theme() -> None:
-    """共通 CSS を注入。各ページの先頭で1回呼ぶ。"""
+    """共通 CSS を注入。各ページの先頭で1回呼ぶ。引き算で洗練したフラットデザイン。"""
     st.markdown(
         """
         <style>
-        /* ---- ベース ---- */
-        .stApp { background:
-            radial-gradient(1200px 600px at 80% -10%, #16213a 0%, transparent 55%),
-            radial-gradient(1000px 500px at -10% 10%, #10243a 0%, transparent 50%),
-            #0b1220; }
-        section.main > div { padding-top: 1rem; }
+        /* ---- ベース: 落ち着いた単色。青1色アクセント ---- */
+        .stApp { background: #0a0e16; }
+        section.main > div.block-container { padding-top: 2.2rem; max-width: 1180px; }
 
-        /* ---- ヘッダーバナー ---- */
-        .eqd2-hero {
-            background: linear-gradient(110deg, #0e7490 0%, #1d4ed8 55%, #4338ca 100%);
-            border-radius: 18px; padding: 22px 26px; margin-bottom: 18px;
-            box-shadow: 0 8px 30px rgba(29,78,216,0.25);
-            border: 1px solid rgba(255,255,255,0.08);
-        }
-        .eqd2-hero h1 { color:#fff; font-size: 26px; margin:0 0 4px 0; font-weight:800; letter-spacing:.5px; }
-        .eqd2-hero p { color: #d6e6ff; margin:0; font-size: 14px; }
-        .eqd2-hero .badge {
-            display:inline-block; background: rgba(255,255,255,0.16); color:#fff;
-            border-radius: 999px; padding: 3px 12px; font-size: 12px; margin-top: 8px;
-            margin-right: 6px; backdrop-filter: blur(4px);
-        }
+        /* ---- フラットなページヘッダ ---- */
+        .eqd2-hero { padding: 2px 0 16px; margin-bottom: 18px;
+            border-bottom: 1px solid #1b2536; }
+        .eqd2-hero h1 { color:#eef2f8; font-size: 23px; font-weight: 700;
+            letter-spacing: 0; margin:0 0 6px 0; line-height:1.3; }
+        .eqd2-hero h1::before { content:""; display:inline-block; width:4px; height:19px;
+            background:#3b82f6; border-radius:2px; margin-right:11px; vertical-align:-3px; }
+        .eqd2-hero p { color:#8a9bb5; margin:0; font-size:13.5px; line-height:1.5; }
 
         /* ---- カード ---- */
-        .eqd2-card {
-            background: #131c2e; border: 1px solid #2a3a55; border-radius: 14px;
-            padding: 16px 18px; margin-bottom: 14px;
-        }
-        .eqd2-card h3 { margin:0 0 10px 0; font-size: 15px; color:#e8eef7;
-            border-left: 3px solid #22d3ee; padding-left: 10px; }
+        .eqd2-card { background:#0f1421; border:1px solid #1b2536; border-radius:12px;
+            padding:16px 18px; margin-bottom:14px; }
+        .eqd2-card h3 { margin:0 0 10px 0; font-size:14px; color:#eef2f8; font-weight:600;
+            border-left:3px solid #3b82f6; padding-left:10px; }
 
         /* ---- メトリックチップ ---- */
         .chip-row { display:flex; gap:10px; flex-wrap:wrap; }
-        .chip {
-            flex:1; min-width: 130px; background:#1b2740; border:1px solid #2a3a55;
-            border-radius: 12px; padding: 12px 14px;
-        }
-        .chip .lbl { font-size: 12px; color:#8da2c0; margin-bottom: 4px; }
-        .chip .val { font-size: 22px; font-weight: 800; color:#e8eef7; }
-        .chip .sub { font-size: 11px; color:#8da2c0; margin-top: 2px; }
+        .chip { flex:1; min-width:130px; background:#0f1421; border:1px solid #1b2536;
+            border-radius:10px; padding:12px 14px; }
+        .chip .lbl { font-size:12px; color:#8a9bb5; margin-bottom:4px; }
+        .chip .val { font-size:22px; font-weight:700; color:#eef2f8; }
+        .chip .sub { font-size:11px; color:#8a9bb5; margin-top:2px; }
+
+        /* ---- サイドバー: 静かに ---- */
+        [data-testid="stSidebar"] { background:#0c111b; border-right:1px solid #1b2536; }
+        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+            color:#c3d0e6; font-size:12.5px; font-weight:600; letter-spacing:.6px;
+            text-transform:none; }
+
+        /* ---- タブ: 下線スタイル(フラット) ---- */
+        .stTabs [data-baseweb="tab-list"] { gap:6px; border-bottom:1px solid #1b2536; }
+        .stTabs [data-baseweb="tab"] { background:transparent; border-radius:0;
+            padding:8px 4px; color:#8a9bb5; font-size:14px; }
+        .stTabs [aria-selected="true"] { background:transparent !important; color:#eef2f8 !important;
+            border-bottom:2px solid #3b82f6; }
 
         /* ---- Streamlit ウィジェット微調整 ---- */
-        [data-testid="stSidebar"] { background: #0d1626; border-right:1px solid #2a3a55; }
-        [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { color:#22d3ee; }
-        .stTabs [data-baseweb="tab-list"] { gap: 4px; }
-        .stTabs [data-baseweb="tab"] {
-            background:#131c2e; border-radius: 10px 10px 0 0; padding: 6px 14px;
-            color:#8da2c0;
-        }
-        .stTabs [aria-selected="true"] { background:#1d4ed8 !important; color:#fff !important; }
-        div[data-testid="stDataFrame"] { border-radius: 10px; overflow:hidden; }
-        .stButton button { border-radius: 10px; }
-        h1, h2, h3, h4 { color:#e8eef7; }
+        div[data-testid="stMetric"] { background:#0f1421; border:1px solid #1b2536;
+            border-radius:10px; padding:10px 14px; }
+        div[data-testid="stMetricValue"] { font-size:22px; }
+        div[data-testid="stDataFrame"] { border-radius:10px; overflow:hidden; }
+        .stButton button { border-radius:8px; border:1px solid #2a3a55; }
+        .stSlider [data-baseweb="slider"] { padding-top:4px; }
+        h1,h2,h3,h4 { color:#eef2f8; }
+        .stCaption, [data-testid="stCaptionContainer"] { color:#7c8ba6; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -96,16 +93,12 @@ def apply_theme() -> None:
 
 
 def page_header(title: str, subtitle: str = "", badges: list[str] | None = None) -> None:
-    """グラデーションのヒーローヘッダ。"""
-    badge_html = ""
-    if badges:
-        badge_html = "<div>" + "".join(f"<span class='badge'>{b}</span>" for b in badges) + "</div>"
+    """フラットなページヘッダ。badges 引数は後方互換のため受けるが表示しない(シンプル化)。"""
     st.markdown(
         f"""
         <div class="eqd2-hero">
             <h1>{title}</h1>
-            <p>{subtitle}</p>
-            {badge_html}
+            {f'<p>{subtitle}</p>' if subtitle else ''}
         </div>
         """,
         unsafe_allow_html=True,
