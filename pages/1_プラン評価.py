@@ -18,7 +18,7 @@ from dose_io import compute_dvh, dvh_metrics, suggest_alpha_beta  # noqa: E402
 from models import (  # noqa: E402
     ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT, model_picker, eqd2_volume,
 )
-from ui_theme import apply_theme, page_header
+from ui_theme import apply_theme, page_header, page_help
 import viz  # noqa: E402
 
 ROI_COLORS = ["#22d3ee", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#3b82f6", "#ec4899", "#ffffff"]
@@ -167,8 +167,17 @@ def tab_roi_ab(dose, structures, model, params, n_fx):
 
 def main():
     page_header("プラン評価 — 画像 + DVH + 構造別α/β",
-                "1つのプランを画像・DVH・構造別評価で総合レビュー。",
-                badges=["単一プラン", "EQD2 オーバーレイ", "DVH", "構造別 α/β"])
+                "1つのプランを画像・DVH・構造別評価で総合レビュー。")
+    page_help(
+        "**何ができる:** 1つの治療計画 (RTDOSE) を、画像・DVH・構造別評価で総合的にレビューします。\n\n"
+        "**使い方:**\n"
+        "1. サイドバーで RTDOSE・分割数 n・DVH 用 α/β を選ぶ。\n"
+        "2. タブで確認:\n"
+        "   - **画像オーバーレイ**: CT に線量を重ね、Physical / EQD2 / 差 (EQD2−Physical) を横3枚で同時表示。断面・スライス・CT窓・アイソドーズ・ROI輪郭は3枚共通で操作。\n"
+        "   - **DVH**: ROI ごとの累積 DVH (実線=Physical、破線=EQD2) と指標 (D95/Mean/Max)。\n"
+        "   - **構造別 α/β**: ROI 名から推奨 α/β を自動提示。値を編集すると組織別に再計算。\n\n"
+        "**差パネルの見方:** 赤=EQD2 が Physical より高い (d>2 Gy/fx、寡分割の生物学的増分)、"
+        "青=低い (d<2 Gy/fx)、白=0 (d=2 Gy/fx)。")
 
     ct = viz.get_ct()
     rd_names = viz.get_rtdose_names()

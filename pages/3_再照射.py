@@ -17,7 +17,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dose_io import compute_dvh, dvh_metrics, course_contribution_maps  # noqa: E402
 from models import ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT, model_picker, eqd2_volume  # noqa: E402
-from ui_theme import apply_theme, page_header
+from ui_theme import apply_theme, page_header, page_help
 import viz  # noqa: E402
 
 COURSE_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#0891b2"]
@@ -164,8 +164,14 @@ def tab_contribution(ct, structures, rd_names, model, params, ab):
 
 def main():
     page_header("再照射 — 累積 EQD2 + コース寄与",
-                "複数プランを EQD2 空間で加算 (recovery 込み)。コース寄与で説明可能な評価。",
-                badges=["複数プラン", "recovery factor", "Course contribution ★", "累積 DVH"])
+                "複数プランを EQD2 空間で加算 (recovery 込み)。コース寄与で説明可能な評価。")
+    page_help(
+        "**何ができる:** 過去+今回など複数の線量分布を EQD2 空間で加算し、再照射時の累積線量を評価します。\n\n"
+        "**使い方:**\n"
+        "1. **累積評価**タブ: Prior (過去) と Current (今回) の RTDOSE・分割数を選び、recovery (回復係数) を調整。累積 EQD2 マップと DVH (Prior / Current / 累積) を確認。\n"
+        "2. **コース寄与マップ**タブ: 各コースがどの voxel にどれだけ寄与したかを、優勢コース map・per-course マップ・hotspot 内訳で確認。\n\n"
+        "**recovery の目安:** 0=完全蓄積 (最も厳しい)、1=完全回復。脊髄なら 6ヶ月で約25%、2年で約50% (文献値)。\n\n"
+        "**注意:** 線形 recovery の簡易モデルで、同一 CT 格子を前提。実臨床では DIR (変形レジストレーション) で位置整合が必要です。")
 
     ct = viz.get_ct()
     rd_names = viz.get_rtdose_names()

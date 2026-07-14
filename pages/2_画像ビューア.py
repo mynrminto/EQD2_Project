@@ -182,13 +182,21 @@ def world_to_idx(ct, x_w, y_w, z_w):
 
 # ---------- main ----------
 def main():
-    from ui_theme import page_header
+    from ui_theme import page_header, page_help
     st.markdown(
         "<style>div[data-testid='stMetricValue']{font-size:18px;}</style>",
         unsafe_allow_html=True,
     )
     page_header("画像ビューア — Eclipse 風 3 直交ビュー",
                 "Axial / Coronal / Sagittal を世界座標で同期。アイソドーズ + 構造体 + カーソル線量表示。")
+    page_help(
+        "**何ができる:** 商用 TPS の慣習に倣った 3 直交同期ビューで、線量分布を空間的に確認します。\n\n"
+        "**使い方:**\n"
+        "1. サイドバーで RTDOSE・分割数 n・α/β・線量 (Physical / EQD2) を選ぶ。\n"
+        "2. 「クロスヘア位置」の X / Y / Z スライダを動かすと、Axial / Coronal / Sagittal の3断面が世界座標で連動。\n"
+        "3. CT窓・カラーウォッシュ・アイソドーズ線・構造体の表示を切り替え。\n\n"
+        "**見方:** クロスヘア位置の HU・Physical・EQD2 が常時表示。アイソドーズは高線量から "
+        "赤→橙→黄→緑→シアン→青→紫。")
 
     ct = _load_ct()
     rd_names = _list_rtdose()

@@ -105,6 +105,17 @@ def page_header(title: str, subtitle: str = "", badges: list[str] | None = None)
     )
 
 
+def page_help(body_md: str, title: str = "このページの使い方", expanded: bool = False) -> None:
+    """各ページ共通の「使い方」折りたたみ。ヘッダ直下に置く。"""
+    st.markdown(
+        "<style>"
+        "details.eqd2-help{background:#0f1421;border:1px solid #1b2536;border-radius:10px;"
+        "padding:2px 4px;margin:2px 0 14px;}"
+        "</style>", unsafe_allow_html=True)
+    with st.expander(title, expanded=expanded):
+        st.markdown(body_md)
+
+
 def chips(items: list[tuple[str, str, str]]) -> None:
     """メトリックチップの行。items = [(label, value, sub), ...]"""
     html = "<div class='chip-row'>"

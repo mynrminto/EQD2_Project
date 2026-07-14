@@ -19,7 +19,7 @@ from models import (  # noqa: E402
     MODELS, MODEL_COLORS, ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT,
     model_picker, compute_eqd2,
 )
-from ui_theme import page_header  # noqa: E402
+from ui_theme import page_header, page_help  # noqa: E402
 
 
 def bed(D, d, ab):
@@ -181,6 +181,16 @@ def tab_iso(model, params):
 def main():
     page_header("計算機 — 処方ベース EQD2/BED",
                 "画像を使わない素早い計算。1回線量・回数・α/β を入れると EQD2/BED を自動計算します。")
+    page_help(
+        "**何ができる:** 画像を使わず、処方 (1回線量 d・回数 n・α/β) から EQD2/BED を計算・比較します。\n\n"
+        "**使い方:**\n"
+        "1. 左サイドバー上部の「生物学的モデル」でモデルを選ぶ (全ページ共通)。\n"
+        "2. 「プラン入力」でプラン名・1回線量 d・回数 n・α/β を入力。「＋ 追加」で複数プランを並べられます。\n"
+        "3. タブで確認:\n"
+        "   - **計算 & グラフ**: 各プランの D・BED・EQD2 の表、棒グラフ、α/β 感度曲線。\n"
+        "   - **4モデル比較**: 同じ処方を 古典LQ / LQ-L / USC / IR で並べて比較。\n"
+        "   - **等EQD2線量表**: 基準 EQD2 を保つ「分割数 × 総線量」の早見表 (CSV 出力可)。再分割の検討に。\n\n"
+        "**ヒント:** EQD2 は「2 Gy/回に換算した効き目」。α/β を小さくするほど寡分割の影響が強く出ます。")
     if "plans" not in st.session_state:
         st.session_state.plans = default_plans()
 

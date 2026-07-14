@@ -20,7 +20,7 @@ from dose_io import (  # noqa: E402
     usc_transition_dose, eqd2_range_map, suggest_alpha_beta,
 )
 from models import ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT, MODEL_COLORS  # noqa: E402
-from ui_theme import apply_theme, page_header
+from ui_theme import apply_theme, page_header, page_help
 import viz  # noqa: E402
 
 
@@ -161,8 +161,15 @@ def tab_ab_uncertainty(ct, dose, structures):
 
 def main():
     page_header("モデル・不確実性 — QA / 教育",
-                "モデル選択と α/β の感度を検討。臨床判断ではなく「選択が結論をどれだけ動かすか」を確認。",
-                badges=["4モデル voxel 比較", "α/β worst-case", "ReCOG 2024 課題"])
+                "モデル選択と α/β の感度を検討。臨床判断ではなく「選択が結論をどれだけ動かすか」を確認。")
+    page_help(
+        "**何ができる:** モデルや α/β の選び方で結論がどれだけ変わるかを確かめる、QA・教育用のページです "
+        "(臨床判断ではなく感度解析)。\n\n"
+        "**使い方:**\n"
+        "1. **4モデル voxel 比較**タブ: 同じプランを 古典LQ / LQ-L / USC / IR で並べて表示。d/fx 応答曲線と ROI DVH も。\n"
+        "2. **α/β worst-case**タブ: α/β の low・high を入力し、EQD2 の low / high / 不確実性幅マップと DVH の不確実性帯を表示。\n\n"
+        "**worst-case の考え方:** OAR (正常組織) の安全性評価では、低い α/β を入れた方が EQD2 を高め "
+        "(=安全側に厳しく) に見積もります。")
 
     ct = viz.get_ct()
     rd_names = viz.get_rtdose_names()
