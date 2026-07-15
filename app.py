@@ -18,13 +18,13 @@ pages = [
             url_path="home", default=True),
     st.Page("views/calculator.py", title="計算機", icon=":material/calculate:",
             url_path="calculator"),
-    st.Page("pages/1_plan_review.py", title="プラン評価", icon=":material/dashboard:",
+    st.Page("views/plan_review.py", title="プラン評価", icon=":material/dashboard:",
             url_path="plan_review"),
-    st.Page("pages/2_image_viewer.py", title="画像ビューア", icon=":material/imagesmode:",
+    st.Page("views/image_viewer.py", title="画像ビューア", icon=":material/imagesmode:",
             url_path="image_viewer"),
-    st.Page("pages/3_reirradiation.py", title="再照射", icon=":material/replay:",
+    st.Page("views/reirradiation.py", title="再照射", icon=":material/replay:",
             url_path="reirradiation"),
-    st.Page("pages/4_model_lab.py", title="モデル・不確実性", icon=":material/science:",
+    st.Page("views/model_lab.py", title="モデル・不確実性", icon=":material/science:",
             url_path="model_lab"),
 ]
 
