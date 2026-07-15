@@ -32,9 +32,21 @@ MODELS = [
 
 
 def main():
-    page_header("EQD2 Biological Dose Suite",
-                "異なる分割スケジュール(通常分割・寡分割・SBRT・再照射)を、"
-                "生物学的線量 EQD2 で「同じ物差し」で比較する試作ツールです。")
+    # --- 大タイトル ---
+    st.markdown(
+        "<div style='padding:6px 0 2px'>"
+        "<div style='font-size:38px;font-weight:800;letter-spacing:.3px;line-height:1.2'>"
+        "EQD2 <span style='color:#3b82f6'>Biological Dose Suite</span></div>"
+        "<div style='color:#8a9bb5;font-size:15px;margin-top:8px'>"
+        "放射線治療の異なる分割スケジュールを、生物学的線量 EQD2 で「同じ物差し」で比較する試作ツール</div>"
+        "</div>",
+        unsafe_allow_html=True)
+
+    # --- 全体像インフォグラフィック ---
+    _overview = Path(__file__).resolve().parent.parent / "assets" / "overview.png"
+    if _overview.exists():
+        st.image(str(_overview), use_container_width=True)
+    st.markdown("")
 
     # --- クイックスタート ---
     st.markdown("#### はじめての方へ (3ステップ)")
@@ -52,19 +64,6 @@ def main():
                 f"<div style='color:#8a9bb5;font-size:13px;line-height:1.6'>{body}</div></div>",
                 unsafe_allow_html=True)
 
-    st.markdown("")
-
-    # --- 各ページの説明 ---
-    st.markdown("#### 画面の一覧")
-    for name, tag, body in PAGES:
-        st.markdown(
-            f"<div class='eqd2-card' style='display:flex;gap:16px;align-items:flex-start'>"
-            f"<div style='min-width:150px'>"
-            f"<div style='font-weight:700;font-size:15px'>{name}</div>"
-            f"<div style='color:#3b82f6;font-size:12px;margin-top:2px'>{tag}</div></div>"
-            f"<div style='color:#c3d0e6;font-size:13.5px;line-height:1.65'>{body}</div></div>",
-            unsafe_allow_html=True)
-
     # --- 用語ミニ解説 ---
     with st.expander("用語ミニ解説 (EQD2 / BED / α/β)"):
         st.markdown(
@@ -73,18 +72,6 @@ def main():
             "- **BED**: 生物学的効果線量。EQD2 の元になる量。\n"
             "- **α/β**: 組織の放射線感受性の指標。腫瘍は通常 10、脊髄など晩期反応組織は 2〜3。"
             "小さいほど1回線量の大きさに敏感(寡分割の影響大)。")
-
-    # --- 4モデル ---
-    st.markdown("#### 生物学的モデル (4種類)")
-    st.caption("1回線量が中程度なら4モデルは一致し、高線量・低線量で差が出ます。用途に応じて選択します。")
-    m = st.columns(4)
-    for col, (name, color, body) in zip(m, MODELS):
-        with col:
-            st.markdown(
-                f"<div class='eqd2-card' style='height:150px;border-top:3px solid {color}'>"
-                f"<div style='font-weight:700;font-size:15px'>{name}</div>"
-                f"<div style='color:#8a9bb5;font-size:12.5px;line-height:1.6;margin-top:6px'>{body}</div></div>",
-                unsafe_allow_html=True)
 
     st.divider()
     st.caption("研究・教育目的の試作です。臨床判断には使用しないでください。")
