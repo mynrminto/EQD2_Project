@@ -187,14 +187,17 @@ def main():
 
     model, params = model_picker()
     st.sidebar.markdown("### プラン")
-    rd_name = st.sidebar.selectbox("RTDOSE", rd_names)
-    n_fx = st.sidebar.number_input("分割数 n", 1, 100, 20, 1)
+    rd_name = st.sidebar.selectbox("線量分布 (RTDOSE)", rd_names,
+                                   format_func=viz.rtdose_label,
+                                   help="評価する線量分布。同梱は水ファントム用の合成サンプルです。")
+    n_fx = st.sidebar.number_input("分割数 n", 1, 100, 20, 1,
+                                   help="EQD2 換算に使う分割回数。線量分布(RTDOSE)には含まれないため別途指定します。")
     ab = st.sidebar.selectbox("DVH 用 α/β (Gy)", ALPHA_BETA_OPTIONS,
                               index=ALPHA_BETA_OPTIONS.index(3.0),
                               format_func=lambda x: ALPHA_BETA_HINT[x])
     dose = viz.get_dose(rd_name)
     structures = viz.get_masks()
-    st.caption(f"RTDOSE: {rd_name} | peak {dose.dose_gy.max():.1f} Gy | モデル: {model}")
+    st.caption(f"{viz.rtdose_label(rd_name)} | 最大線量 {dose.dose_gy.max():.1f} Gy | モデル: {model}")
 
     t1, t2, t3 = st.tabs(["画像オーバーレイ", "DVH", "構造別 α/β"])
     with t1:

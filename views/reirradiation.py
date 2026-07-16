@@ -25,12 +25,14 @@ COURSE_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#0891b2
 
 def tab_cumulative(ct, structures, rd_names, model, params, ab):
     c = st.columns([1, 1, 1, 1])
-    prior_name = c[0].selectbox("Prior RTDOSE", rd_names,
-                                index=rd_names.index("RD.prior.dcm") if "RD.prior.dcm" in rd_names else 0)
-    prior_n = c[1].number_input("Prior 分割数", 1, 100, 25)
+    prior_name = c[0].selectbox("過去プランの線量分布", rd_names,
+                                index=rd_names.index("RD.prior.dcm") if "RD.prior.dcm" in rd_names else 0,
+                                format_func=viz.rtdose_label)
+    prior_n = c[1].number_input("過去プランの分割数", 1, 100, 25)
     cur_idx = rd_names.index("RD.current.dcm") if "RD.current.dcm" in rd_names else min(1, len(rd_names) - 1)
-    current_name = c[2].selectbox("Current RTDOSE", rd_names, index=cur_idx)
-    current_n = c[3].number_input("Current 分割数", 1, 100, 5)
+    current_name = c[2].selectbox("今回プランの線量分布", rd_names, index=cur_idx,
+                                  format_func=viz.rtdose_label)
+    current_n = c[3].number_input("今回プランの分割数", 1, 100, 5)
 
     cc = st.columns([1, 1, 1])
     recovery = cc[0].slider("Recovery factor", 0.0, 1.0, 0.5, 0.05,
@@ -98,7 +100,8 @@ def tab_contribution(ct, structures, rd_names, model, params, ab):
             st.markdown(f"<div style='background:{COURSE_COLORS[i]};padding:4px 8px;color:#fff;"
                         f"border-radius:6px;font-weight:600;margin-bottom:4px'>Course {i+1}</div>",
                         unsafe_allow_html=True)
-            f = st.selectbox("RTDOSE", rd_names, index=min(i, len(rd_names) - 1), key=f"cc_f_{i}")
+            f = st.selectbox("線量分布", rd_names, index=min(i, len(rd_names) - 1),
+                             format_func=viz.rtdose_label, key=f"cc_f_{i}")
             n_i = st.number_input("分割数", 1, 100, [25, 5, 5, 5, 5, 5][i], key=f"cc_n_{i}")
             rec = st.slider("Recovery", 0.0, 1.0, 0.5 if i == 0 else 0.0, 0.05, key=f"cc_r_{i}")
             courses.append({"file": f, "n": int(n_i), "rec": rec, "color": COURSE_COLORS[i]})

@@ -26,6 +26,20 @@ WL_PRESETS = {
 ROI_PALETTE = ["#ff00ff", "#ff5555", "#55ff55", "#55ffff",
                "#ffaa55", "#aa55ff", "#ffff55", "#ffffff"]
 
+# RTDOSE ファイル名 → 分かりやすい表示ラベル(水ファントムの合成サンプル)
+_RTDOSE_LABELS = {
+    "RD.prior.dcm": "サンプル: 過去プラン 50 Gy(通常分割の想定)",
+    "RD.current.dcm": "サンプル: 今回プラン 30 Gy(SBRT の想定)",
+    "RD.synthetic.dcm": "サンプル: デモ用 60 Gy",
+}
+
+
+def rtdose_label(name: str) -> str:
+    """RTDOSE ファイル名を人が読める表示名に変換(未知ファイルは素名を返す)。"""
+    if name in _RTDOSE_LABELS:
+        return _RTDOSE_LABELS[name]
+    return name.replace(".dcm", "")
+
 # Eclipse 慣習のアイソドーズ配色 (高→低 %)
 ISODOSE_LEVELS = [
     (100, "#ff2020"), (95, "#ff7700"), (90, "#ffbb00"), (80, "#ffff00"),

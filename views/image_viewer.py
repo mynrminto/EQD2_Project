@@ -24,6 +24,7 @@ from dose_io import (  # noqa: E402
     load_rtstruct_masks, compute_dvh, eqd2_map,
 )
 from models import model_picker, eqd2_volume  # noqa: E402
+from viz import rtdose_label  # noqa: E402
 
 ALPHA_BETA_OPTIONS = [1.0, 1.5, 2.0, 3.0, 10.0]
 
@@ -209,7 +210,9 @@ def main():
     # ===== Sidebar =====
     g_model, g_params = model_picker()
     st.sidebar.markdown("### プラン")
-    rd_name = st.sidebar.selectbox("RTDOSE", rd_names)
+    rd_name = st.sidebar.selectbox("線量分布 (RTDOSE)", rd_names,
+                                   format_func=rtdose_label,
+                                   help="評価する線量分布。同梱は水ファントム用の合成サンプルです。")
     dose = _load_dose(rd_name)
     physical = dose.dose_gy
     peak_phys = float(physical.max())

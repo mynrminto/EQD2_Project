@@ -176,10 +176,12 @@ def main():
     if not rd_names:
         st.error("RTDOSE がありません。")
         st.stop()
-    rd_name = st.sidebar.selectbox("RTDOSE", rd_names)
+    rd_name = st.sidebar.selectbox("線量分布 (RTDOSE)", rd_names,
+                                   format_func=viz.rtdose_label,
+                                   help="評価する線量分布。同梱は水ファントム用の合成サンプルです。")
     dose = viz.get_dose(rd_name)
     structures = viz.get_masks()
-    st.caption(f"RTDOSE: {rd_name} | peak {dose.dose_gy.max():.1f} Gy")
+    st.caption(f"{viz.rtdose_label(rd_name)} | 最大線量 {dose.dose_gy.max():.1f} Gy")
 
     t1, t2 = st.tabs(["4モデル voxel 比較", "α/β 不確実性 (worst-case)"])
     with t1:
