@@ -147,14 +147,44 @@ def is_aligned_with(ct: CTVolume, dose: DoseVolume, tol: float = 0.5) -> bool:
     return True
 
 
+def _trilinear_sample(vol: np.ndarray, iz: np.ndarray, iy: np.ndarray,
+                      ix: np.ndarray) -> np.ndarray:
+    """純 numpy の trilinear 補間 (格子外は 0)。scipy.ndimage.map_coordinates 相当。
+
+    vol: (nz,ny,nx)、iz/iy/ix: 補間先の分数インデックス(同一 shape にブロードキャスト済み)。
+    scipy 依存を避けるため自前実装(Python バージョン非依存で動く)。
+    """
+    nz, ny, nx = vol.shape
+    iz, iy, ix = np.broadcast_arrays(iz, iy, ix)
+    z0 = np.floor(iz).astype(np.int64)
+    y0 = np.floor(iy).astype(np.int64)
+    x0 = np.floor(ix).astype(np.int64)
+    fz, fy, fx = iz - z0, iy - y0, ix - x0
+
+    def corner(zz, yy, xx):
+        valid = (zz >= 0) & (zz < nz) & (yy >= 0) & (yy < ny) & (xx >= 0) & (xx < nx)
+        v = vol[np.clip(zz, 0, nz - 1), np.clip(yy, 0, ny - 1), np.clip(xx, 0, nx - 1)]
+        return np.where(valid, v, 0.0)
+
+    c000 = corner(z0, y0, x0);     c001 = corner(z0, y0, x0 + 1)
+    c010 = corner(z0, y0 + 1, x0); c011 = corner(z0, y0 + 1, x0 + 1)
+    c100 = corner(z0 + 1, y0, x0);     c101 = corner(z0 + 1, y0, x0 + 1)
+    c110 = corner(z0 + 1, y0 + 1, x0); c111 = corner(z0 + 1, y0 + 1, x0 + 1)
+    c00 = c000 * (1 - fx) + c001 * fx
+    c01 = c010 * (1 - fx) + c011 * fx
+    c10 = c100 * (1 - fx) + c101 * fx
+    c11 = c110 * (1 - fx) + c111 * fx
+    c0 = c00 * (1 - fy) + c01 * fy
+    c1 = c10 * (1 - fy) + c11 * fy
+    return c0 * (1 - fz) + c1 * fz
+
+
 def resample_dose_to_ct(dose: DoseVolume, ct: CTVolume) -> DoseVolume:
     """RTDOSE を CT 格子に trilinear 補間でリサンプリング。
 
     実臨床の RTDOSE は CT と別の解像度・原点を持つことが多い。
-    DVH やオーバーレイ表示のため、CT 格子に揃える。
+    DVH やオーバーレイ表示のため、CT 格子に揃える。(純 numpy 実装, scipy 不要)
     """
-    from scipy.ndimage import map_coordinates  # type: ignore
-
     nz_ct, ny_ct, nx_ct = ct.hu.shape
 
     # CT 各 voxel の世界座標 (mm)
@@ -170,10 +200,7 @@ def resample_dose_to_ct(dose: DoseVolume, ct: CTVolume) -> DoseVolume:
     iy = (y_ct[None, :, None] - dose.origin[1]) / dose.px_y
     ix = (x_ct[None, None, :] - dose.origin[0]) / dose.px_x
 
-    iz_b, iy_b, ix_b = np.broadcast_arrays(iz, iy, ix)
-    coords = np.stack([iz_b, iy_b, ix_b], axis=0)
-    resampled = map_coordinates(dose.dose_gy, coords, order=1,
-                                 mode="constant", cval=0.0)
+    resampled = _trilinear_sample(dose.dose_gy, iz, iy, ix)
 
     return DoseVolume(
         dose_gy=resampled.astype(np.float32),
