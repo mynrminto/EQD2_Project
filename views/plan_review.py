@@ -41,10 +41,19 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
         {"Axial": 0, "Coronal": 1, "Sagittal": 2}[axis]])
     idx = st.slider("スライス", 0, n_slices - 1, hot, key="pv_idx")
 
-    cc = st.columns([1, 1, 1])
+    cc = st.columns([1, 1, 1.4])
     alpha = cc[0].slider("透明度", 0.0, 1.0, 0.5, 0.05, key="pv_alpha")
     thr_pct = cc[1].slider("表示閾値 (%)", 0, 100, 10, 1, key="pv_thr")
-    iso = cc[2].checkbox("アイソドーズ線 (Phys/EQD2)", True, key="pv_iso")
+    disp = cc[2].radio("表示方法", ["カラーウォッシュ", "等高線", "両方"],
+                       horizontal=True, key="pv_disp",
+                       help="等高線=アイソドーズ線。重ね合わせや低線量域の把握に便利です。")
+
+    ref_dose = None
+    if disp in ("等高線", "両方"):
+        rc = st.columns([1, 3])
+        ref_dose = rc[0].number_input("基準線量 (100%線量, Gy)", 0.1, 500.0,
+                                      float(round(physical.max())), 0.5, key="pv_ref",
+                                      help="等高線の%はこの線量を100%とした割合。処方線量にすると 105/110% のホットスポットが見えます。")
 
     rois = []
     if structures and structures.rois:
@@ -57,18 +66,27 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
 
     ct_gray = viz.window_ct(viz.take_slice(ct.hu, axis, idx), W, L)
     roi_slices = [(viz.take_slice(m, axis, idx), col) for m, col in rois]
+    show_wash = disp in ("カラーウォッシュ", "両方")
+    show_iso = disp in ("等高線", "両方")
 
     def panel(vol, label, cmap_name, divergent):
         vmax = (float(np.max(np.abs(vol))) if divergent else float(vol.max())) or 1e-6
         dose_slice = viz.take_slice(vol, axis, idx)
-        img = viz.overlay(ct_gray, dose_slice, vmax, vmax * thr_pct / 100.0,
-                          cmap_name, alpha, divergent=divergent)
-        if iso and not divergent:
-            img = viz.apply_isodose_lines(img, dose_slice, vmax, viz.ISODOSE_LEVELS)
+        if divergent:                       # 差パネルは常にカラーウォッシュ(発散色)
+            img = viz.overlay(ct_gray, dose_slice, vmax, vmax * thr_pct / 100.0,
+                              cmap_name, alpha, divergent=True)
+        elif show_wash:
+            img = viz.overlay(ct_gray, dose_slice, vmax, vmax * thr_pct / 100.0,
+                              cmap_name, alpha)
+        else:                               # 等高線のみ → CT 上に線だけ
+            img = viz.to_rgb(ct_gray)
+        if show_iso and not divergent:
+            img = viz.apply_isodose_lines(img, dose_slice, ref_dose, viz.ISODOSE_FULL)
         if roi_slices:
             img = viz.apply_roi_outlines(img, roi_slices)
         viz.show_image(img, label)
-        viz.colorbar(vmax, cmap_name, divergent=divergent)
+        if show_wash or divergent:
+            viz.colorbar(vmax, cmap_name, divergent=divergent)
 
     st.caption(f"{axis} slice={idx} — 同じ断面を Physical / EQD2 / 差 で並べて比較")
     p = st.columns(3)
@@ -78,6 +96,15 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
         panel(eqd2, f"EQD2 (peak {eqd2.max():.1f} Gy)", cmap, False)
     with p[2]:
         panel(diff, f"差 EQD2−Physical (±{np.abs(diff).max():.1f} Gy)", "RdBu_r", True)
+
+    if show_iso:
+        chips = "".join(
+            f"<span style='background:{c};color:#000;font-weight:700;font-size:11px;"
+            f"border-radius:4px;padding:2px 8px;margin:2px'>{pct}%</span>"
+            for pct, c in viz.ISODOSE_FULL)
+        st.markdown(f"<b style='font-size:12px'>アイソドーズ (基準 {ref_dose:.1f} Gy = 100%)</b>"
+                    f"<div style='display:flex;flex-wrap:wrap;gap:2px;margin-top:4px'>{chips}</div>",
+                    unsafe_allow_html=True)
 
     m = st.columns(5)
     m[0].metric("Physical peak", f"{physical.max():.2f} Gy")
