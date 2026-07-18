@@ -24,21 +24,13 @@ from dose_io import (  # noqa: E402
     load_rtstruct_masks, compute_dvh, eqd2_map,
 )
 from models import model_picker, eqd2_volume  # noqa: E402
-from viz import rtdose_label  # noqa: E402
+from viz import rtdose_label, ISODOSE_FULL  # noqa: E402
 
 ALPHA_BETA_OPTIONS = [1.0, 1.5, 2.0, 3.0, 10.0]
 
-# Eclipse 慣習的なアイソドーズ配色 (高→低 %)
-ISODOSE_LEVELS = [
-    (100, "#ff2020"),
-    (95,  "#ff7700"),
-    (90,  "#ffbb00"),
-    (80,  "#ffff00"),
-    (70,  "#88ff00"),
-    (50,  "#00ffaa"),
-    (30,  "#00aaff"),
-    (10,  "#9966ff"),
-]
+# アイソドーズ配色は viz.ISODOSE_FULL (14 準位: 110〜10%) を共通利用。
+# 既定で ON にする準位 (初期表示をすっきりさせる。他は左パネルで随時 ON 可)。
+ISO_DEFAULT_ON = {100, 95, 90, 80, 70, 50, 30, 10}
 
 # 構造体パレット (順に割り当て)
 ROI_PALETTE = ["#ff00ff", "#ff5555", "#55ff55", "#55ffff",
@@ -136,15 +128,30 @@ def apply_dose_wash(rgb, dose, vmax, threshold, cmap_name, alpha):
     return (rgb * (1 - a) + dose_rgb * a).astype(np.uint8)
 
 
-def apply_isodose_lines(rgb, dose, vmax, levels):
+def apply_isodose_lines(rgb, dose, ref, levels):
     out = rgb.copy()
     for pct, color in levels:
-        thresh = vmax * pct / 100.0
-        mask = dose >= thresh
+        mask = dose >= ref * pct / 100.0
         outline = slice_outline_2d(mask)
         if outline.any():
             out[outline] = hex_to_rgb(color)
     return out
+
+
+def apply_isodose_bands(rgb, dose, ref, levels, alpha):
+    """Eclipse 流のカラーウォッシュ: アイソドーズ準位ごとに離散バンドで塗る。
+
+    低% から順に塗り、高% で上書きするので、各 voxel は「超えた最大準位」の色になる。
+    連続カラーマップ (apply_dose_wash) と違い、線と同じ配色でバンド表示できる。
+    """
+    out = rgb.astype(np.float32)
+    for pct, color in sorted(levels, key=lambda t: t[0]):  # 低→高
+        mask = dose >= ref * pct / 100.0
+        if mask.any():
+            c = np.array(hex_to_rgb(color), dtype=np.float32)
+            a = (mask * alpha)[..., None]
+            out = out * (1 - a) + c * a
+    return out.astype(np.uint8)
 
 
 def apply_roi_overlay(rgb, masks_2d_with_colors, mode: str, fill_alpha: float):
@@ -230,12 +237,12 @@ def main():
     wl = st.sidebar.selectbox("プリセット", list(WL_PRESETS.keys()))
     W, L = WL_PRESETS[wl]
 
-    st.sidebar.markdown("### 線量オーバーレイ")
-    show_wash = st.sidebar.checkbox("カラーウォッシュ", True)
+    st.sidebar.markdown("### 線量ヒートマップ (連続)")
+    show_wash = st.sidebar.checkbox("連続カラーウォッシュ", True,
+                                    help="連続カラーマップの線量ヒートマップ。アイソドーズ(離散)とは別レイヤ。")
     cmap = st.sidebar.selectbox("カラーマップ", ["jet", "turbo", "viridis", "plasma", "hot"], 0)
     wash_alpha = st.sidebar.slider("透明度", 0.0, 1.0, 0.35, 0.05)
     wash_thresh_pct = st.sidebar.slider("表示閾値 (peak %)", 0, 100, 10, 1)
-    show_isodose = st.sidebar.checkbox("アイソドーズライン", True)
 
     st.sidebar.markdown("### 構造体")
     roi_selections: dict[str, str] = {}
@@ -316,17 +323,52 @@ def main():
 
     x_idx, y_idx, z_idx = world_to_idx(ct, x_w, y_w, z_w)
 
-    # ===== Render three orthogonal views =====
+    # ===== Isodose 制御パネル (左上・Eclipse 流) + 3 直交ビュー =====
     wash_thresh = peak_display * wash_thresh_pct / 100.0
-    iso_levels = ISODOSE_LEVELS if show_isodose else []
+    st.session_state.setdefault("iso_mode", "線")
+
+    panel_col, views_col = st.columns([1.15, 6])
+    with panel_col:
+        # タイトルをクリックで 線 ⇄ カラーウォッシュ (Varian Eclipse の操作感)
+        if st.button("▤ Isodose", use_container_width=True,
+                     help="クリックで 線 ⇄ カラーウォッシュ を切替 (Eclipse 流)。"):
+            st.session_state.iso_mode = "ウォッシュ" if st.session_state.iso_mode == "線" else "線"
+        iso_on = st.checkbox("表示 ON", value=True, key="iso_on")
+        st.caption(f"モード: **{st.session_state.iso_mode}**　←タイトルで切替")
+        ref_dose = st.number_input("基準 100% (Gy)", 0.1, 1000.0,
+                                   float(round(peak_display)), 0.5, key="iso_ref",
+                                   help="各%はこの線量を100%とした割合。処方線量にするとホット"
+                                        "スポット(>100%)も見えます。既定は表示中線量のピーク。")
+        qa, qb = st.columns(2)
+        if qa.button("全ON", use_container_width=True):
+            for pct, _ in ISODOSE_FULL:
+                st.session_state[f"isolv_{pct}"] = True
+        if qb.button("全OFF", use_container_width=True):
+            for pct, _ in ISODOSE_FULL:
+                st.session_state[f"isolv_{pct}"] = False
+        levels_on = []
+        for pct, color in ISODOSE_FULL:
+            r = st.columns([0.55, 1.45])
+            on = r[0].checkbox(f"{pct}%", value=(pct in ISO_DEFAULT_ON),
+                               key=f"isolv_{pct}", label_visibility="collapsed")
+            r[1].markdown(
+                f"<div style='background:{color};color:#000;border-radius:3px;"
+                f"padding:1px 6px;font-size:11px;font-weight:700;white-space:nowrap;'>"
+                f"{pct}% <span style='font-weight:400'>{ref_dose*pct/100:.1f}Gy</span></div>",
+                unsafe_allow_html=True)
+            if on:
+                levels_on.append((pct, color))
 
     def render(ct_slice, dose_slice, masks_2d, xhair_h, xhair_v):
         rgb = to_rgb(window_ct(ct_slice, W, L))
         if show_wash:
             rgb = apply_dose_wash(rgb, dose_slice, peak_display,
                                    wash_thresh, cmap, wash_alpha)
-        if iso_levels:
-            rgb = apply_isodose_lines(rgb, dose_slice, peak_display, iso_levels)
+        if iso_on and levels_on:
+            if st.session_state.iso_mode == "ウォッシュ":
+                rgb = apply_isodose_bands(rgb, dose_slice, ref_dose, levels_on, 0.5)
+            else:
+                rgb = apply_isodose_lines(rgb, dose_slice, ref_dose, levels_on)
         if masks_2d:
             rgb = apply_roi_overlay(rgb, masks_2d, roi_mode, roi_alpha)
         return draw_crosshair(rgb, xhair_h, xhair_v)
@@ -350,19 +392,20 @@ def main():
         y_idx, (nz - 1) - z_idx,
     )
 
-    vcols = st.columns(3)
-    with vcols[0]:
-        st.image(Image.fromarray(ax_img),
-                 caption=f"Axial   Z = {z_w:+.1f} mm   ({z_idx+1}/{nz})",
-                 use_container_width=True)
-    with vcols[1]:
-        st.image(Image.fromarray(cor_img),
-                 caption=f"Coronal   Y = {y_w:+.1f} mm   ({y_idx+1}/{ny})",
-                 use_container_width=True)
-    with vcols[2]:
-        st.image(Image.fromarray(sag_img),
-                 caption=f"Sagittal   X = {x_w:+.1f} mm   ({x_idx+1}/{nx})",
-                 use_container_width=True)
+    with views_col:
+        vcols = st.columns(3)
+        with vcols[0]:
+            st.image(Image.fromarray(ax_img),
+                     caption=f"Axial   Z = {z_w:+.1f} mm   ({z_idx+1}/{nz})",
+                     use_container_width=True)
+        with vcols[1]:
+            st.image(Image.fromarray(cor_img),
+                     caption=f"Coronal   Y = {y_w:+.1f} mm   ({y_idx+1}/{ny})",
+                     use_container_width=True)
+        with vcols[2]:
+            st.image(Image.fromarray(sag_img),
+                     caption=f"Sagittal   X = {x_w:+.1f} mm   ({x_idx+1}/{nx})",
+                     use_container_width=True)
 
     # ===== Cursor info bar =====
     hu_at = float(ct.hu[z_idx, y_idx, x_idx])
@@ -376,19 +419,6 @@ def main():
                   delta=f"{eqd2_at - dose_at:+.2f} Gy vs Physical")
     if peak_phys > 0:
         ic[3].metric("dose / Rx peak", f"{100*dose_at/peak_phys:.1f} %")
-
-    # ===== Isodose legend =====
-    if show_isodose:
-        st.markdown("<b>Isodose</b>", unsafe_allow_html=True)
-        lc = st.columns(len(ISODOSE_LEVELS))
-        for i, (pct, color) in enumerate(ISODOSE_LEVELS):
-            with lc[i]:
-                st.markdown(
-                    f"<div style='background:{color}; padding:6px; text-align:center;"
-                    f" color:#000; border-radius:4px; font-weight:600; font-size:13px;'>"
-                    f"{pct}%<br><span style='font-size:11px;'>{peak_display*pct/100:.1f} Gy</span></div>",
-                    unsafe_allow_html=True,
-                )
 
     # ===== DVH panel =====
     if structures and roi_selections:

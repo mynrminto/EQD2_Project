@@ -24,6 +24,8 @@ pages = [
             url_path="image_viewer"),
     st.Page("views/reirradiation.py", title="再照射", icon=":material/replay:",
             url_path="reirradiation"),
+    st.Page("views/overlay_lab.py", title="重ね合わせ実験", icon=":material/layers:",
+            url_path="overlay_lab"),
     st.Page("views/model_lab.py", title="モデル・不確実性", icon=":material/science:",
             url_path="model_lab"),
 ]
