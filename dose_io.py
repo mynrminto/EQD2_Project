@@ -147,36 +147,37 @@ def is_aligned_with(ct: CTVolume, dose: DoseVolume, tol: float = 0.5) -> bool:
     return True
 
 
+def _interp_axis(vol: np.ndarray, idx: np.ndarray, axis: int) -> np.ndarray:
+    """vol を axis 方向に、分数インデックス idx (1D) で線形補間 (格子外は 0)。"""
+    n = vol.shape[axis]
+    i0 = np.floor(idx).astype(np.intp)
+    frac = (idx - i0).astype(np.float32)
+    i1 = i0 + 1
+    m0 = ((i0 >= 0) & (i0 < n)).astype(np.float32)
+    m1 = ((i1 >= 0) & (i1 < n)).astype(np.float32)
+    v0 = np.take(vol, np.clip(i0, 0, n - 1), axis=axis)
+    v1 = np.take(vol, np.clip(i1, 0, n - 1), axis=axis)
+    shape = [1] * vol.ndim
+    shape[axis] = idx.shape[0]
+    w0 = ((1.0 - frac) * m0).reshape(shape)
+    w1 = (frac * m1).reshape(shape)
+    return v0 * w0 + v1 * w1
+
+
 def _trilinear_sample(vol: np.ndarray, iz: np.ndarray, iy: np.ndarray,
                       ix: np.ndarray) -> np.ndarray:
-    """純 numpy の trilinear 補間 (格子外は 0)。scipy.ndimage.map_coordinates 相当。
+    """trilinear 補間 (格子外は 0)。軸ごとの 1D 線形補間を逐次適用する純 numpy 実装。
 
-    vol: (nz,ny,nx)、iz/iy/ix: 補間先の分数インデックス(同一 shape にブロードキャスト済み)。
-    scipy 依存を避けるため自前実装(Python バージョン非依存で動く)。
+    trilinear は 3 方向 1D 線形補間のテンソル積なので、軸独立な分数インデックス
+    (iz,iy,ix は各軸に沿ってのみ変化) に対しては軸ごとの逐次適用で厳密に一致する。
+    8 隅を同時確保する素朴実装よりピークメモリが 1/3 以下で、クラウド無料枠(~1GB)の
+    OOM を避けられる。scipy.ndimage.map_coordinates 相当(Python バージョン非依存)。
+    vol: (nz,ny,nx)、iz/iy/ix: 各軸の分数インデックス (それぞれ 1D)。
     """
-    nz, ny, nx = vol.shape
-    iz, iy, ix = np.broadcast_arrays(iz, iy, ix)
-    z0 = np.floor(iz).astype(np.int64)
-    y0 = np.floor(iy).astype(np.int64)
-    x0 = np.floor(ix).astype(np.int64)
-    fz, fy, fx = iz - z0, iy - y0, ix - x0
-
-    def corner(zz, yy, xx):
-        valid = (zz >= 0) & (zz < nz) & (yy >= 0) & (yy < ny) & (xx >= 0) & (xx < nx)
-        v = vol[np.clip(zz, 0, nz - 1), np.clip(yy, 0, ny - 1), np.clip(xx, 0, nx - 1)]
-        return np.where(valid, v, 0.0)
-
-    c000 = corner(z0, y0, x0);     c001 = corner(z0, y0, x0 + 1)
-    c010 = corner(z0, y0 + 1, x0); c011 = corner(z0, y0 + 1, x0 + 1)
-    c100 = corner(z0 + 1, y0, x0);     c101 = corner(z0 + 1, y0, x0 + 1)
-    c110 = corner(z0 + 1, y0 + 1, x0); c111 = corner(z0 + 1, y0 + 1, x0 + 1)
-    c00 = c000 * (1 - fx) + c001 * fx
-    c01 = c010 * (1 - fx) + c011 * fx
-    c10 = c100 * (1 - fx) + c101 * fx
-    c11 = c110 * (1 - fx) + c111 * fx
-    c0 = c00 * (1 - fy) + c01 * fy
-    c1 = c10 * (1 - fy) + c11 * fy
-    return c0 * (1 - fz) + c1 * fz
+    out = _interp_axis(vol, iz, axis=0)   # (nz_ct, ny_dose, nx_dose)
+    out = _interp_axis(out, iy, axis=1)   # (nz_ct, ny_ct,  nx_dose)
+    out = _interp_axis(out, ix, axis=2)   # (nz_ct, ny_ct,  nx_ct)
+    return out
 
 
 def resample_dose_to_ct(dose: DoseVolume, ct: CTVolume) -> DoseVolume:
@@ -194,11 +195,11 @@ def resample_dose_to_ct(dose: DoseVolume, ct: CTVolume) -> DoseVolume:
 
     # Dose 格子の世界座標
     dose_z = np.array(dose.z_positions, dtype=np.float32)
-    # Dose 格子インデックス座標 (fractional)
-    iz = (z_ct[:, None, None] - dose_z[0]) / (dose_z[1] - dose_z[0]) if len(dose_z) > 1 \
-         else np.zeros((nz_ct, 1, 1), dtype=np.float32)
-    iy = (y_ct[None, :, None] - dose.origin[1]) / dose.px_y
-    ix = (x_ct[None, None, :] - dose.origin[0]) / dose.px_x
+    # Dose 格子インデックス座標 (fractional, 各軸 1D)
+    iz = (z_ct - dose_z[0]) / (dose_z[1] - dose_z[0]) if len(dose_z) > 1 \
+         else np.zeros(nz_ct, dtype=np.float32)
+    iy = (y_ct - dose.origin[1]) / dose.px_y
+    ix = (x_ct - dose.origin[0]) / dose.px_x
 
     resampled = _trilinear_sample(dose.dose_gy, iz, iy, ix)
 
