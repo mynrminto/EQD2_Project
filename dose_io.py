@@ -496,3 +496,116 @@ def dvh_metrics(dose_gy: np.ndarray, mask: np.ndarray,
         "D5_Gy": d5,
         "V20_pct": float(100 * (vals >= 20).sum() / n),
     }
+
+
+def write_eqd2_rtdose_bytes(dose_gy: np.ndarray, ct: "CTVolume", folder: Path,
+                            dose_comment: str = "EQD2",
+                            dose_type: str = "EFFECTIVE") -> bytes:
+    """CT 格子に整列した生物学的線量 (EQD2 等) を DICOM RTDOSE のバイト列で返す。
+
+    voxel 配列 (nz,ny,nx) を uint32 + DoseGridScaling で符号化し、幾何 (原点・
+    ピクセル間隔・スライス位置) は CTVolume から、FrameOfReferenceUID /
+    StudyInstanceUID / 患者情報 / ImageOrientationPatient は元 CT DICOM から
+    継承する。これにより TPS で CT と同一フレームに登録できる。
+    DoseType=EFFECTIVE は「生物学的(等価)線量」を意味し、物理線量と区別される。
+    """
+    import io
+    import datetime
+    from pydicom.dataset import Dataset, FileDataset
+    from pydicom.uid import generate_uid, ExplicitVRLittleEndian
+
+    RT_DOSE_SOP = "1.2.840.10008.5.1.4.1.1.481.2"
+
+    # 元 CT から UID・患者情報・向きを継承 (無ければ生成)
+    ref = None
+    for f in folder.rglob("*.dcm"):
+        try:
+            d = pydicom.dcmread(f, stop_before_pixels=True)
+            if getattr(d, "Modality", "") == "CT":
+                ref = {
+                    "frame": getattr(d, "FrameOfReferenceUID", None) or generate_uid(),
+                    "study": getattr(d, "StudyInstanceUID", None) or generate_uid(),
+                    "name": str(getattr(d, "PatientName", "")),
+                    "id": str(getattr(d, "PatientID", "")),
+                    "iop": [float(x) for x in getattr(d, "ImageOrientationPatient",
+                                                      [1, 0, 0, 0, 1, 0])],
+                }
+                break
+        except Exception:
+            continue
+    if ref is None:
+        ref = {"frame": generate_uid(), "study": generate_uid(),
+               "name": "", "id": "", "iop": [1, 0, 0, 0, 1, 0]}
+
+    n_slices, rows, cols = dose_gy.shape
+    peak = max(float(np.nanmax(dose_gy)), 1e-6)
+    scale = peak / (2 ** 32 - 1)
+    finite = np.nan_to_num(np.asarray(dose_gy, dtype=np.float64),
+                           nan=0.0, posinf=peak, neginf=0.0)
+    arr_u32 = np.clip(np.rint(finite / scale), 0, 2 ** 32 - 1).astype(np.uint32)
+
+    file_meta = Dataset()
+    file_meta.MediaStorageSOPClassUID = RT_DOSE_SOP
+    file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    file_meta.ImplementationClassUID = generate_uid()
+
+    ds = FileDataset("eqd2.dcm", {}, file_meta=file_meta, preamble=b"\0" * 128)
+    now = datetime.datetime.now()
+    ds.SpecificCharacterSet = "ISO_IR 100"
+    ds.SOPClassUID = RT_DOSE_SOP
+    ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+    ds.Modality = "RTDOSE"
+    ds.Manufacturer = "EQD2 Suite"
+    ds.PatientName = ref["name"]
+    ds.PatientID = ref["id"]
+    ds.PatientBirthDate = ""
+    ds.PatientSex = ""
+    ds.StudyInstanceUID = ref["study"]
+    ds.SeriesInstanceUID = generate_uid()
+    ds.SeriesDescription = dose_comment
+    ds.StudyID = "1"
+    ds.SeriesNumber = "1"
+    ds.InstanceNumber = "1"
+    ds.StudyDate = now.strftime("%Y%m%d")
+    ds.StudyTime = now.strftime("%H%M%S")
+    ds.ContentDate = ds.StudyDate
+    ds.ContentTime = ds.StudyTime
+    ds.FrameOfReferenceUID = ref["frame"]
+    ds.PositionReferenceIndicator = ""
+
+    ds.ImagePositionPatient = [float(v) for v in ct.origin]
+    ds.ImageOrientationPatient = ref["iop"]
+    ds.PixelSpacing = [float(ct.px_y), float(ct.px_x)]
+    ds.SliceThickness = (float(abs(ct.z_positions[1] - ct.z_positions[0]))
+                         if n_slices > 1 else 1.0)
+
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = "MONOCHROME2"
+    ds.NumberOfFrames = int(n_slices)
+    ds.FrameIncrementPointer = pydicom.tag.Tag(0x3004, 0x000C)  # GridFrameOffsetVector
+    ds.GridFrameOffsetVector = [float(z - ct.z_positions[0]) for z in ct.z_positions]
+    ds.Rows = int(rows)
+    ds.Columns = int(cols)
+    ds.BitsAllocated = 32
+    ds.BitsStored = 32
+    ds.HighBit = 31
+    ds.PixelRepresentation = 0
+
+    ds.DoseUnits = "GY"
+    ds.DoseType = dose_type          # EFFECTIVE = 生物学的(等価)線量
+    ds.DoseSummationType = "PLAN"
+    ds.DoseComment = dose_comment
+    ds.DoseGridScaling = scale
+    ds.PixelData = arr_u32.tobytes()
+
+    buf = io.BytesIO()
+    try:
+        # pydicom >= 3.0: 符号化は file_meta.TransferSyntaxUID から決定
+        ds.save_as(buf, enforce_file_format=True)
+    except TypeError:
+        # pydicom < 3.0 (cloud/USB の 2.4 等)
+        ds.is_little_endian = True
+        ds.is_implicit_VR = False
+        ds.save_as(buf, write_like_original=False)
+    return buf.getvalue()

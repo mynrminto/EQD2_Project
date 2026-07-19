@@ -27,6 +27,20 @@ MODEL_HELP = {
     "IR (Induced Repair)": "低線量過敏 HRS/IRR を補正 (Joiner ら)。低線量裾野で効く。",
 }
 
+# ROI 名 → 推奨モデル: 標的は古典 LQ、それ以外 (OAR) は LQ-L。
+# LQ-L は高線量寡分割 (SBRT/SRS) での LQ の過大評価を補正し、耐容超過の誤判定を
+# 避ける。通常分割 (d ≤ d_T) では LQ-L は LQ と一致するため OAR への割当は安全側。
+# 参考: Singh ら (Br J Radiol 2020) の「腫瘍 LQ・OAR LQ-L」運用。
+_TARGET_KEYWORDS = ("gtv", "ctv", "ptv", "itv", "tumor", "target", "腫瘍", "boost")
+
+
+def suggest_model(roi_name: str) -> str:
+    """ROI 名から推奨生物モデルを返す (標的=古典LQ、それ以外=LQ-L)。"""
+    n = roi_name.lower()
+    if any(k in n for k in _TARGET_KEYWORDS):
+        return MODELS[0]           # 古典LQ
+    return MODELS[1]               # LQ-L (Astrahan)
+
 ALPHA_BETA_OPTIONS = [1.0, 1.5, 2.0, 3.0, 10.0]
 ALPHA_BETA_HINT = {
     1.0: "1.0  晩期反応が特に強い組織",

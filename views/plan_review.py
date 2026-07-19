@@ -14,9 +14,13 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dose_io import compute_dvh, dvh_metrics, suggest_alpha_beta  # noqa: E402
+from dose_io import (  # noqa: E402
+    compute_dvh, dvh_metrics, suggest_alpha_beta,
+    write_eqd2_rtdose_bytes, find_dicom_folder,
+)
 from models import (  # noqa: E402
     ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT, model_picker, eqd2_volume,
+    suggest_model, MODELS,
 )
 from ui_theme import apply_theme, page_header, page_help
 import viz  # noqa: E402
@@ -115,6 +119,24 @@ def tab_image(ct, dose, structures, model, params, n_fx, ab):
     st.caption("差パネル: 赤=EQD2がPhysicalより高い(d>2Gy/fx、寡分割の生物学的増分)／"
                "青=低い(d<2Gy/fx)／d=2Gy/fxで0(白)。")
 
+    # ---- EQD2 を DICOM RTDOSE で書き出し (TPS 取り込み用) ----
+    with st.expander("この EQD2 を DICOM RTDOSE で書き出す（TPS 取り込み用）"):
+        st.caption("計算した voxel 単位 EQD2 を、CT と同一フレームの RTDOSE "
+                   "(DoseType=EFFECTIVE) として書き出します。TPS やビューアに読み込み可能です。")
+        if st.button("RTDOSE を生成", key="pv_gen_dcm"):
+            with st.spinner("EQD2 を DICOM 符号化中…"):
+                st.session_state["pv_eqd2_dcm"] = write_eqd2_rtdose_bytes(
+                    eqd2, ct, find_dicom_folder(),
+                    dose_comment=f"EQD2 {model} n={int(n_fx)} ab={ab}")
+                st.session_state["pv_eqd2_dcm_label"] = (
+                    f"{model} / n={int(n_fx)} / α/β={ab} / peak {eqd2.max():.1f} Gy")
+        if "pv_eqd2_dcm" in st.session_state:
+            st.download_button("EQD2_RTDOSE.dcm をダウンロード",
+                               st.session_state["pv_eqd2_dcm"],
+                               file_name="EQD2_RTDOSE.dcm", mime="application/dicom",
+                               key="pv_dl_dcm")
+            st.caption(f"生成済み: {st.session_state.get('pv_eqd2_dcm_label', '')}")
+
 
 def tab_dvh(dose, structures, model, params, n_fx, ab):
     if not (structures and structures.rois):
@@ -154,36 +176,44 @@ def tab_dvh(dose, structures, model, params, n_fx, ab):
 
 
 def tab_roi_ab(dose, structures, model, params, n_fx):
-    """構造別 α/β: ROI 名から推奨 α/β を自動提示し、ROI ごとに別の α/β で評価。"""
+    """構造別 α/β + モデル: ROI 名から推奨 α/β と推奨モデル(LQ/LQ-L)を自動提示し、
+    構造ごとに別の α/β・別モデルで EQD2 を評価する。"""
     if not (structures and structures.rois):
         st.info("RTSTRUCT がありません。")
         return
-    st.caption("ROI 名から推奨 α/β を自動提示。組織ごとに異なる α/β で同時に EQD2 DVH を計算。")
+    st.caption("ROI 名から**推奨 α/β と推奨モデル**を自動提示 (標的=古典LQ / OAR=LQ-L)。"
+               "組織ごとに異なる α/β・モデルで同時に EQD2 DVH を計算。値は編集可。")
     physical = dose.dose_gy
-    rows = [{"ROI": n, "推奨 α/β": suggest_alpha_beta(n) or 3.0,
-             "使用 α/β": suggest_alpha_beta(n) or 3.0} for n in structures.rois]
+    rows = [{"ROI": n,
+             "推奨 α/β": suggest_alpha_beta(n) or 3.0,
+             "使用 α/β": suggest_alpha_beta(n) or 3.0,
+             "使用モデル": suggest_model(n)} for n in structures.rois]
     edited = st.data_editor(
         pd.DataFrame(rows), hide_index=True, use_container_width=True,
-        column_config={"使用 α/β": st.column_config.NumberColumn("使用 α/β (Gy)", min_value=0.5,
-                                                                  max_value=15.0, step=0.1),
-                       "推奨 α/β": st.column_config.NumberColumn("自動推奨", disabled=True)},
+        column_config={
+            "使用 α/β": st.column_config.NumberColumn("使用 α/β (Gy)", min_value=0.5,
+                                                      max_value=15.0, step=0.1),
+            "推奨 α/β": st.column_config.NumberColumn("自動推奨", disabled=True),
+            "使用モデル": st.column_config.SelectboxColumn("使用モデル (自動切替)",
+                                                          options=MODELS, required=True),
+        },
         key="roiab_editor")
     fig = go.Figure()
     out = []
     for i, r in edited.iterrows():
-        name, ab = r["ROI"], float(r["使用 α/β"])
+        name, ab, roi_model = r["ROI"], float(r["使用 α/β"]), r["使用モデル"]
         mask = structures.rois[name]
         if not mask.any():
             continue
-        e = eqd2_volume(model, physical, int(n_fx), ab, params)
+        e = eqd2_volume(roi_model, physical, int(n_fx), ab, params)
         color = ROI_COLORS[i % len(ROI_COLORS)]
         d, v = compute_dvh(e, mask)
-        fig.add_trace(go.Scatter(x=d, y=v, name=f"{name} (α/β={ab})",
+        fig.add_trace(go.Scatter(x=d, y=v, name=f"{name} ({roi_model.split(' ')[0]}, α/β={ab})",
                                  line=dict(color=color, width=2.5)))
         m = dvh_metrics(e, mask, structures.px_x, structures.px_y, structures.slice_thickness)
-        out.append({"ROI": name, "α/β": ab, "Mean": f"{m['mean_Gy']:.1f}",
+        out.append({"ROI": name, "モデル": roi_model, "α/β": ab, "Mean": f"{m['mean_Gy']:.1f}",
                     "Max": f"{m['max_Gy']:.1f}", "D95": f"{m['D95_Gy']:.1f}"})
-    fig.update_layout(title=f"構造別 α/β を用いた EQD2 DVH (n={n_fx})", xaxis_title="EQD2 (Gy)",
+    fig.update_layout(title=f"構造別 α/β・モデルを用いた EQD2 DVH (n={n_fx})", xaxis_title="EQD2 (Gy)",
                       yaxis_title="Volume (%)", yaxis_range=[0, 105], height=460,
                       template="plotly_dark", hovermode="x unified",
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -200,9 +230,9 @@ def main():
         "**使い方:**\n"
         "1. サイドバーで RTDOSE・分割数 n・DVH 用 α/β を選ぶ。\n"
         "2. タブで確認:\n"
-        "   - **画像オーバーレイ**: CT に線量を重ね、Physical / EQD2 / 差 (EQD2−Physical) を横3枚で同時表示。断面・スライス・CT窓・アイソドーズ・ROI輪郭は3枚共通で操作。\n"
+        "   - **画像オーバーレイ**: CT に線量を重ね、Physical / EQD2 / 差 (EQD2−Physical) を横3枚で同時表示。断面・スライス・CT窓・アイソドーズ・ROI輪郭は3枚共通で操作。EQD2 は **DICOM RTDOSE で書き出し**可能 (TPS 取り込み用)。\n"
         "   - **DVH**: ROI ごとの累積 DVH (実線=Physical、破線=EQD2) と指標 (D95/Mean/Max)。\n"
-        "   - **構造別 α/β**: ROI 名から推奨 α/β を自動提示。値を編集すると組織別に再計算。\n\n"
+        "   - **構造別 α/β・モデル**: ROI 名から**推奨 α/β と推奨モデル (標的=古典LQ / OAR=LQ-L)** を自動提示。値・モデルは編集可で、組織別に再計算。\n\n"
         "**差パネルの見方:** 赤=EQD2 が Physical より高い (d>2 Gy/fx、寡分割の生物学的増分)、"
         "青=低い (d<2 Gy/fx)、白=0 (d=2 Gy/fx)。")
 
