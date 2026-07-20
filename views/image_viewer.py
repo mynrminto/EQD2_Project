@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import pydicom
 import streamlit as st
@@ -24,13 +25,20 @@ from dose_io import (  # noqa: E402
     load_rtstruct_masks, compute_dvh, eqd2_map,
 )
 from models import model_picker, eqd2_volume  # noqa: E402
-from viz import rtdose_label, ISODOSE_FULL  # noqa: E402
+from viz import rtdose_label  # noqa: E402
 
 ALPHA_BETA_OPTIONS = [1.0, 1.5, 2.0, 3.0, 10.0]
 
-# アイソドーズ配色は viz.ISODOSE_FULL (14 準位: 110〜10%) を共通利用。
-# 既定で ON にする準位 (初期表示をすっきりさせる。他は左パネルで随時 ON 可)。
-ISO_DEFAULT_ON = {100, 95, 90, 80, 70, 50, 30, 10}
+# Eclipse 流アイソドーズ配色 (高→低 の 8 準位)。
+# 実機 (Varian Eclipse) は準位を **絶対線量 [Gy]** で保持し、凡例も Gy 表示。
+ISODOSE_COLORS = ["#ff2525", "#ff62a8", "#ffd400", "#37c837",
+                  "#2b6cff", "#25c4ff", "#5a4fd0", "#7d5bd0"]
+_DEFAULT_FRACS = [1.00, 0.95, 0.90, 0.80, 0.70, 0.50, 0.30, 0.10]
+
+
+def default_levels_gy(peak: float) -> list[float]:
+    """ピーク線量から既定のアイソドーズ準位 (絶対 Gy, 高→低) を作る。"""
+    return [round(peak * f, 3) for f in _DEFAULT_FRACS]
 
 # 構造体パレット (順に割り当て)
 ROI_PALETTE = ["#ff00ff", "#ff5555", "#55ff55", "#55ffff",
@@ -128,25 +136,25 @@ def apply_dose_wash(rgb, dose, vmax, threshold, cmap_name, alpha):
     return (rgb * (1 - a) + dose_rgb * a).astype(np.uint8)
 
 
-def apply_isodose_lines(rgb, dose, ref, levels):
+def apply_isodose_lines(rgb, dose, levels_gy):
+    """Isodose Levels: 各準位 (絶対 Gy) の等高線のみを描く (塗らない)。"""
     out = rgb.copy()
-    for pct, color in levels:
-        mask = dose >= ref * pct / 100.0
-        outline = slice_outline_2d(mask)
+    for gy, color in levels_gy:
+        outline = slice_outline_2d(dose >= gy)
         if outline.any():
             out[outline] = hex_to_rgb(color)
     return out
 
 
-def apply_isodose_bands(rgb, dose, ref, levels, alpha):
-    """Eclipse 流のカラーウォッシュ: アイソドーズ準位ごとに離散バンドで塗る。
+def apply_isodose_wash(rgb, dose, levels_gy, alpha):
+    """Isodose Color Wash: 各準位 (絶対 Gy) を離散バンドで塗る。
 
-    低% から順に塗り、高% で上書きするので、各 voxel は「超えた最大準位」の色になる。
-    連続カラーマップ (apply_dose_wash) と違い、線と同じ配色でバンド表示できる。
+    低線量から順に塗り高線量で上書きするので、各 voxel は「超えた最大準位」の色になる。
+    Eclipse と同様、線表示 (Isodose Levels) とは **排他** で、同時には重ねない。
     """
     out = rgb.astype(np.float32)
-    for pct, color in sorted(levels, key=lambda t: t[0]):  # 低→高
-        mask = dose >= ref * pct / 100.0
+    for gy, color in sorted(levels_gy, key=lambda t: t[0]):  # 低→高
+        mask = dose >= gy
         if mask.any():
             c = np.array(hex_to_rgb(color), dtype=np.float32)
             a = (mask * alpha)[..., None]
@@ -237,12 +245,10 @@ def main():
     wl = st.sidebar.selectbox("プリセット", list(WL_PRESETS.keys()))
     W, L = WL_PRESETS[wl]
 
-    st.sidebar.markdown("### 線量ヒートマップ (連続)")
-    show_wash = st.sidebar.checkbox("連続カラーウォッシュ", True,
-                                    help="連続カラーマップの線量ヒートマップ。アイソドーズ(離散)とは別レイヤ。")
-    cmap = st.sidebar.selectbox("カラーマップ", ["jet", "turbo", "viridis", "plasma", "hot"], 0)
-    wash_alpha = st.sidebar.slider("透明度", 0.0, 1.0, 0.35, 0.05)
-    wash_thresh_pct = st.sidebar.slider("表示閾値 (peak %)", 0, 100, 10, 1)
+    st.sidebar.markdown("### アイソドーズ")
+    st.sidebar.caption("Eclipse と同じく **Color Wash(塗り) と Levels(線) は排他**です。"
+                       "準位は絶対線量 [Gy] で、画像左上のパネルで編集できます。")
+    wash_alpha = st.sidebar.slider("Color Wash 透明度", 0.0, 1.0, 0.45, 0.05)
 
     st.sidebar.markdown("### 構造体")
     roi_selections: dict[str, str] = {}
@@ -323,52 +329,47 @@ def main():
 
     x_idx, y_idx, z_idx = world_to_idx(ct, x_w, y_w, z_w)
 
-    # ===== Isodose 制御パネル (左上・Eclipse 流) + 3 直交ビュー =====
-    wash_thresh = peak_display * wash_thresh_pct / 100.0
-    st.session_state.setdefault("iso_mode", "線")
+    # ===== Isodose 制御パネル (左上・Eclipse 準拠) + 3 直交ビュー =====
+    # 準位は絶対線量 [Gy]。表示中線量 (Physical/EQD2) ごとに既定値を持つ。
+    lv_key = f"iso_levels_{show_eqd2}"
+    default_lv = default_levels_gy(peak_display)
 
-    panel_col, views_col = st.columns([1.15, 6])
+    panel_col, views_col = st.columns([1.7, 6])
     with panel_col:
-        # タイトルをクリックで 線 ⇄ カラーウォッシュ (Varian Eclipse の操作感)
-        if st.button("▤ Isodose", use_container_width=True,
-                     help="クリックで 線 ⇄ カラーウォッシュ を切替 (Eclipse 流)。"):
-            st.session_state.iso_mode = "ウォッシュ" if st.session_state.iso_mode == "線" else "線"
-        iso_on = st.checkbox("表示 ON", value=True, key="iso_on")
-        st.caption(f"モード: **{st.session_state.iso_mode}**　←タイトルで切替")
-        ref_dose = st.number_input("基準 100% (Gy)", 0.1, 1000.0,
-                                   float(round(peak_display)), 0.5, key="iso_ref",
-                                   help="各%はこの線量を100%とした割合。処方線量にするとホット"
-                                        "スポット(>100%)も見えます。既定は表示中線量のピーク。")
-        qa, qb = st.columns(2)
-        if qa.button("全ON", use_container_width=True):
-            for pct, _ in ISODOSE_FULL:
-                st.session_state[f"isolv_{pct}"] = True
-        if qb.button("全OFF", use_container_width=True):
-            for pct, _ in ISODOSE_FULL:
-                st.session_state[f"isolv_{pct}"] = False
-        levels_on = []
-        for pct, color in ISODOSE_FULL:
-            r = st.columns([0.55, 1.45])
-            on = r[0].checkbox(f"{pct}%", value=(pct in ISO_DEFAULT_ON),
-                               key=f"isolv_{pct}", label_visibility="collapsed")
-            r[1].markdown(
-                f"<div style='background:{color};color:#000;border-radius:3px;"
-                f"padding:1px 6px;font-size:11px;font-weight:700;white-space:nowrap;'>"
-                f"{pct}% <span style='font-weight:400'>{ref_dose*pct/100:.1f}Gy</span></div>",
-                unsafe_allow_html=True)
-            if on:
-                levels_on.append((pct, color))
+        mode = st.radio("表示", ["Color Wash", "Levels (線)", "オフ"], key="iso_mode",
+                        help="Eclipse と同じく塗りと線は排他。同時には重ねません。")
+        title = ("Isodose Color Wash [Gy]" if mode == "Color Wash"
+                 else "Isodose Levels [Gy]" if mode.startswith("Levels")
+                 else "Isodose (オフ)")
+        st.markdown(f"<div style='color:#ff5555;font-weight:700;font-size:12px;"
+                    f"margin:6px 0 2px'>{title}</div>", unsafe_allow_html=True)
+
+        ed = st.data_editor(
+            pd.DataFrame({"✓": [True] * len(default_lv), "Gy": default_lv}),
+            hide_index=True, use_container_width=True, key=lv_key,
+            column_config={
+                "✓": st.column_config.CheckboxColumn("✓", width="small"),
+                "Gy": st.column_config.NumberColumn("線量 [Gy]", min_value=0.0,
+                                                    step=0.1, format="%.3f"),
+            })
+        active = [(float(r["Gy"]), ISODOSE_COLORS[i % len(ISODOSE_COLORS)])
+                  for i, r in ed.iterrows() if bool(r["✓"])]
+        # Eclipse 風の色付き凡例 (チェック済みの準位のみ)
+        if active and mode != "オフ":
+            st.markdown("".join(
+                f"<div style='color:{c};font-weight:700;font-size:12px;"
+                f"font-family:monospace;line-height:1.35'>✓ {gy:.3f}</div>"
+                for gy, c in active), unsafe_allow_html=True)
+        st.caption(f"ピーク {peak_display:.2f} Gy")
 
     def render(ct_slice, dose_slice, masks_2d, xhair_h, xhair_v):
         rgb = to_rgb(window_ct(ct_slice, W, L))
-        if show_wash:
-            rgb = apply_dose_wash(rgb, dose_slice, peak_display,
-                                   wash_thresh, cmap, wash_alpha)
-        if iso_on and levels_on:
-            if st.session_state.iso_mode == "ウォッシュ":
-                rgb = apply_isodose_bands(rgb, dose_slice, ref_dose, levels_on, 0.5)
-            else:
-                rgb = apply_isodose_lines(rgb, dose_slice, ref_dose, levels_on)
+        # Color Wash と Levels は排他 (Eclipse 準拠)
+        if active:
+            if mode == "Color Wash":
+                rgb = apply_isodose_wash(rgb, dose_slice, active, wash_alpha)
+            elif mode.startswith("Levels"):
+                rgb = apply_isodose_lines(rgb, dose_slice, active)
         if masks_2d:
             rgb = apply_roi_overlay(rgb, masks_2d, roi_mode, roi_alpha)
         return draw_crosshair(rgb, xhair_h, xhair_v)

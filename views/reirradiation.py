@@ -23,66 +23,114 @@ import viz  # noqa: E402
 COURSE_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#0891b2"]
 
 
-def tab_cumulative(ct, structures, rd_names, model, params, ab):
-    c = st.columns([1, 1, 1, 1])
-    prior_name = c[0].selectbox("過去プランの線量分布", rd_names,
-                                index=rd_names.index("RD.prior.dcm") if "RD.prior.dcm" in rd_names else 0,
-                                format_func=viz.rtdose_label)
-    prior_n = c[1].number_input("過去プランの分割数", 1, 100, 25)
-    cur_idx = rd_names.index("RD.current.dcm") if "RD.current.dcm" in rd_names else min(1, len(rd_names) - 1)
-    current_name = c[2].selectbox("今回プランの線量分布", rd_names, index=cur_idx,
-                                  format_func=viz.rtdose_label)
-    current_n = c[3].number_input("今回プランの分割数", 1, 100, 5)
+def tab_plan_sum(ct, structures, rd_names, model, params, ab):
+    """Eclipse の "Insert New Plan Sum" に準拠した最大 3 プランの合成。"""
+    st.caption("Varian Eclipse の **Plan Sum** に準拠。最大 3 プランを "
+               "**Operation (+/−)・Plan Weight** つきで合成します。EQD2 は"
+               "プランごとに自分の分割数 n で換算してから加算します。")
 
-    cc = st.columns([1, 1, 1])
-    recovery = cc[0].slider("Recovery factor", 0.0, 1.0, 0.5, 0.05,
-                            help="0=完全蓄積, 1=完全回復")
-    mode = cc[1].selectbox("マップ", ["累積 EQD2", "Prior EQD2", "Current EQD2", "Prior 寄与分"])
-    axis = cc[2].selectbox("断面", ["Axial", "Coronal", "Sagittal"], key="reirr_axis")
+    n_avail = len(rd_names)
+    picks = [rd_names[min(i, n_avail - 1)] for i in range(3)]
 
-    prior = viz.get_dose(prior_name).dose_gy
-    current = viz.get_dose(current_name).dose_gy
-    if prior.shape != current.shape:
-        st.error(f"グリッド形状が異なります ({prior.shape} vs {current.shape})。"
-                 "実臨床では deformable registration が必要です。")
+    def _fx(name: str) -> int:
+        """プラン名から既定の分割数を推定 (過去=通常分割, 今回=寡分割)。"""
+        n = name.lower()
+        return 25 if "prior" in n else 5
+
+    def _rec(name: str) -> float:
+        """過去プランのみ既定で回復を見込む。"""
+        return 0.5 if "prior" in name.lower() else 0.0
+
+    base = pd.DataFrame({
+        "含める": [True, True, False],
+        "Plan ID": picks,
+        "Operation": ["+", "+", "+"],
+        "Plan Weight": [1.00, 1.00, 1.00],
+        "Fractions": [_fx(p) for p in picks],
+        "Recovery": [_rec(p) for p in picks],
+    })
+    ed = st.data_editor(
+        base, hide_index=True, use_container_width=True, key="psum_editor",
+        column_config={
+            "含める": st.column_config.CheckboxColumn("✓", width="small"),
+            "Plan ID": st.column_config.SelectboxColumn("Plan ID", options=rd_names, required=True),
+            "Operation": st.column_config.SelectboxColumn("Operation", options=["+", "−"], required=True),
+            "Plan Weight": st.column_config.NumberColumn("Plan Weight", min_value=0.0,
+                                                         max_value=5.0, step=0.05, format="%.2f"),
+            "Fractions": st.column_config.NumberColumn("Fractions", min_value=1, max_value=100, step=1),
+            "Recovery": st.column_config.NumberColumn("Recovery", min_value=0.0, max_value=1.0,
+                                                      step=0.05, format="%.2f",
+                                                      help="0=完全蓄積, 1=完全回復 (再照射用)"),
+        })
+
+    rows = [r for _, r in ed.iterrows() if bool(r["含める"])]
+    if not rows:
+        st.warning("少なくとも 1 つのプランを選択してください。")
         return
 
-    e_prior = eqd2_volume(model, prior, int(prior_n), float(ab), params)
-    e_current = eqd2_volume(model, current, int(current_n), float(ab), params)
-    e_cum = e_prior * (1.0 - recovery) + e_current
+    plan_sum, per_plan, summary, shapes = None, [], [], set()
+    for r in rows:
+        phys = viz.get_dose(r["Plan ID"]).dose_gy
+        shapes.add(phys.shape)
+        n_i, w = int(r["Fractions"]), float(r["Plan Weight"])
+        sign = 1.0 if r["Operation"] == "+" else -1.0
+        rec = float(r["Recovery"])
+        e = eqd2_volume(model, phys, n_i, float(ab), params)
+        contrib = sign * w * e * (1.0 - rec)
+        plan_sum = contrib if plan_sum is None else plan_sum + contrib
+        per_plan.append((str(r["Plan ID"]), e, contrib))
+        tot = float(phys.max())
+        summary.append({"Plan ID": viz.rtdose_label(str(r["Plan ID"])),
+                        "Op": r["Operation"], "Weight": f"{w:.2f}", "Fractions": n_i,
+                        "Fraction Dose [Gy]": f"{tot / n_i:.3f}",
+                        "Total Dose [Gy]": f"{tot:.3f}", "Recovery": f"{rec:.2f}",
+                        "EQD2 peak [Gy]": f"{float(e.max()):.1f}"})
+    if len(shapes) > 1:
+        st.error("プラン間でグリッド形状が異なります。実臨床では DIR による位置整合が必要です。")
+        return
 
-    vol = {"累積 EQD2": e_cum, "Prior EQD2": e_prior, "Current EQD2": e_current,
-           "Prior 寄与分": e_cum - e_current}[mode]
-    vmax = float(vol.max())
-    z, y, x = np.unravel_index(int(e_cum.argmax()), e_cum.shape)
+    st.markdown("**Σ Plan Sum の内訳**")
+    st.dataframe(pd.DataFrame(summary), hide_index=True, use_container_width=True)
+
+    cc = st.columns([1, 1])
+    view = cc[0].selectbox("マップ", ["Σ Plan Sum"] + [f"{i+1}. {viz.rtdose_label(p[0])}"
+                                                      for i, p in enumerate(per_plan)],
+                           key="psum_view")
+    axis = cc[1].selectbox("断面", ["Axial", "Coronal", "Sagittal"], key="reirr_axis")
+    vol = plan_sum if view.startswith("Σ") else per_plan[int(view.split(".")[0]) - 1][2]
+
+    vmax = max(float(np.max(np.abs(vol))), 1e-6)
+    z, y, x = np.unravel_index(int(plan_sum.argmax()), plan_sum.shape)
     default_idx = {"Axial": int(z), "Coronal": int(y), "Sagittal": int(x)}[axis]
-    n_slices = viz.slice_count(ct.hu.shape, axis)
-    idx = st.slider("スライス", 0, n_slices - 1, default_idx, key="reirr_idx")
+    idx = st.slider("スライス", 0, viz.slice_count(ct.hu.shape, axis) - 1,
+                    default_idx, key="reirr_idx")
 
     ct_gray = viz.window_ct(viz.take_slice(ct.hu, axis, idx), 2000, 0)
     img = viz.overlay(ct_gray, viz.take_slice(vol, axis, idx), vmax, vmax * 0.05, "jet", 0.6)
 
     col_img, col_info = st.columns([3, 1])
     with col_img:
-        viz.show_image(img, f"{axis} slice={idx} | {mode} (α/β={ab}, recovery={recovery:.2f})")
-        viz.colorbar(vmax, "jet", label=f"{mode}: 0 … {vmax:.1f} Gy")
+        viz.show_image(img, f"{axis} slice={idx} | {view} (α/β={ab}, {model})")
+        viz.colorbar(vmax, "jet", label=f"{view}: 0 … {vmax:.1f} Gy")
     with col_info:
-        st.metric("Prior EQD2 max", f"{e_prior.max():.1f} Gy")
-        st.metric("Current EQD2 max", f"{e_current.max():.1f} Gy")
-        st.metric("累積 EQD2 max", f"{e_cum.max():.1f} Gy",
-                  delta=f"+{e_cum.max()-e_current.max():.1f} vs Current")
+        for i, (name, e, contrib) in enumerate(per_plan):
+            st.metric(f"{i+1}. {viz.rtdose_label(name)[:14]}", f"{float(e.max()):.1f} Gy",
+                      delta=f"寄与 {float(contrib.max()):+.1f}")
+        st.metric("Σ Plan Sum max", f"{float(plan_sum.max()):.1f} Gy")
         st.caption(f"Hotspot: ({ct.origin[0]+x*ct.px_x:+.0f}, "
                    f"{ct.origin[1]+y*ct.px_y:+.0f}, {ct.z_positions[z]:+.0f}) mm")
 
-    if structures and "Water" in structures.rois or (structures and structures.rois):
-        roi = "Water" if structures and "Water" in structures.rois else list(structures.rois.keys())[0]
+    if structures and structures.rois:
+        roi = "Water" if "Water" in structures.rois else list(structures.rois.keys())[0]
         st.markdown(f"**DVH (ROI: {roi})**")
         fig = go.Figure()
-        for arr, name, color, w in [(e_prior, "Prior", "#3b82f6", 2),
-                                    (e_current, "Current", "#ef4444", 2),
-                                    (e_cum, "累積", "#22c55e", 3)]:
-            d, v = compute_dvh(arr, structures.rois[roi])
-            fig.add_trace(go.Scatter(x=d, y=v, name=name, line=dict(color=color, width=w)))
+        for i, (name, e, contrib) in enumerate(per_plan):
+            d, v = compute_dvh(e, structures.rois[roi])
+            fig.add_trace(go.Scatter(x=d, y=v, name=f"{i+1}. {viz.rtdose_label(name)}",
+                                     line=dict(color=COURSE_COLORS[i % len(COURSE_COLORS)], width=2)))
+        d, v = compute_dvh(plan_sum, structures.rois[roi])
+        fig.add_trace(go.Scatter(x=d, y=v, name="Σ Plan Sum",
+                                 line=dict(color="#22c55e", width=3)))
         fig.update_layout(xaxis_title="EQD2 (Gy)", yaxis_title="Volume (%)", yaxis_range=[0, 105],
                           height=380, template="plotly_dark", hovermode="x unified",
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -166,12 +214,14 @@ def tab_contribution(ct, structures, rd_names, model, params, ab):
 
 
 def main():
-    page_header("再照射 — 累積 EQD2 + コース寄与",
-                "複数プランを EQD2 空間で加算 (recovery 込み)。コース寄与で説明可能な評価。")
+    page_header("Plan Sum — 累積 EQD2 + コース寄与",
+                "Eclipse 準拠の Plan Sum で最大 3 プランを合成 (Operation・Plan Weight・recovery)。")
     page_help(
-        "**何ができる:** 過去+今回など複数の線量分布を EQD2 空間で加算し、再照射時の累積線量を評価します。\n\n"
+        "**何ができる:** 複数の線量分布を EQD2 空間で合成し、再照射時の累積線量を評価します。\n\n"
         "**使い方:**\n"
-        "1. **累積評価**タブ: Prior (過去) と Current (今回) の RTDOSE・分割数を選び、recovery (回復係数) を調整。累積 EQD2 マップと DVH (Prior / Current / 累積) を確認。\n"
+        "1. **Plan Sum** タブ: Varian Eclipse の『Insert New Plan Sum』に準拠した表で、**最大 3 プラン**を選択。"
+        "プランごとに **Operation (+/−)・Plan Weight・Fractions・Recovery** を指定すると、"
+        "Fraction Dose / Total Dose / EQD2 peak が内訳表に出ます。Σ Plan Sum のマップと DVH を確認。\n"
         "2. **コース寄与マップ**タブ: 各コースがどの voxel にどれだけ寄与したかを、優勢コース map・per-course マップ・hotspot 内訳で確認。\n\n"
         "**recovery の目安:** 0=完全蓄積 (最も厳しい)、1=完全回復。脊髄なら 6ヶ月で約25%、2年で約50% (文献値)。\n\n"
         "**注意:** 線形 recovery の簡易モデルで、同一 CT 格子を前提。実臨床では DIR (変形レジストレーション) で位置整合が必要です。")
@@ -191,9 +241,9 @@ def main():
     structures = viz.get_masks()
     st.caption(f"モデル: {model} | 加算 α/β: {ab}")
 
-    t1, t2 = st.tabs(["累積評価", "コース寄与マップ"])
+    t1, t2 = st.tabs(["Plan Sum", "コース寄与マップ"])
     with t1:
-        tab_cumulative(ct, structures, rd_names, model, params, ab)
+        tab_plan_sum(ct, structures, rd_names, model, params, ab)
     with t2:
         tab_contribution(ct, structures, rd_names, model, params, ab)
 

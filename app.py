@@ -22,7 +22,7 @@ pages = [
             url_path="plan_review"),
     st.Page("views/image_viewer.py", title="画像ビューア", icon=":material/imagesmode:",
             url_path="image_viewer"),
-    st.Page("views/reirradiation.py", title="再照射", icon=":material/replay:",
+    st.Page("views/reirradiation.py", title="Plan Sum", icon=":material/replay:",
             url_path="reirradiation"),
     st.Page("views/overlay_lab.py", title="重ね合わせ実験", icon=":material/layers:",
             url_path="overlay_lab"),
