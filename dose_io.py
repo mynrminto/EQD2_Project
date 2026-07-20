@@ -609,3 +609,113 @@ def write_eqd2_rtdose_bytes(dose_gy: np.ndarray, ct: "CTVolume", folder: Path,
         ds.is_implicit_VR = False
         ds.save_as(buf, write_like_original=False)
     return buf.getvalue()
+
+
+# ---------- Clinical Goal 用の線量指標 (Eclipse の Objective 相当) ----------
+def dose_to_volume_cc(dose_gy: np.ndarray, mask: np.ndarray,
+                      volume_cc: float, voxel_cc: float) -> float:
+    """指定体積 (cc) が受ける最小線量 D_{x cm³}。Eclipse の "D 0.3 cm³" 相当。
+
+    ROI 内で線量の高い上位 n voxel (n = volume_cc / voxel_cc) を取り、その最小値を返す。
+    """
+    vals = dose_gy[mask]
+    if vals.size == 0 or voxel_cc <= 0:
+        return 0.0
+    n_vox = max(1, min(int(round(volume_cc / voxel_cc)), vals.size))
+    top = np.partition(vals, vals.size - n_vox)[vals.size - n_vox:]
+    return float(top.min())
+
+
+def dose_to_volume_pct(dose_gy: np.ndarray, mask: np.ndarray, pct: float) -> float:
+    """体積 pct% が受ける最小線量 D_{x%} (D95 等)。"""
+    vals = dose_gy[mask]
+    if vals.size == 0:
+        return 0.0
+    k = max(1, min(int(round(vals.size * pct / 100.0)), vals.size))
+    top = np.partition(vals, vals.size - k)[vals.size - k:]
+    return float(top.min())
+
+
+def volume_above_dose(dose_gy: np.ndarray, mask: np.ndarray,
+                      gy: float, voxel_cc: float) -> tuple[float, float]:
+    """線量 gy 以上を受ける体積 (cc, %) — V_xGy。"""
+    vals = dose_gy[mask]
+    if vals.size == 0:
+        return 0.0, 0.0
+    n = int((vals >= gy).sum())
+    return float(n * voxel_cc), float(100.0 * n / vals.size)
+
+
+# 指標名 → 説明 (UI 用)
+GOAL_METRICS = {
+    "Dmax":  "最大線量",
+    "Dmean": "平均線量",
+    "D_cc":  "指定体積(cc)が受ける最小線量 (例 D 0.3cm³)",
+    "D_%":   "指定体積(%)が受ける最小線量 (例 D95%)",
+    "V_Gy":  "指定線量(Gy)以上を受ける体積 (%)",
+}
+
+
+def evaluate_goal(dose_gy: np.ndarray, mask: np.ndarray, metric: str, param: float,
+                  voxel_cc: float) -> tuple[float, str]:
+    """Clinical Goal の実測値を返す。戻り値: (値, 単位)。"""
+    if not mask.any():
+        return 0.0, "-"
+    if metric == "Dmax":
+        return float(dose_gy[mask].max()), "Gy"
+    if metric == "Dmean":
+        return float(dose_gy[mask].mean()), "Gy"
+    if metric == "D_cc":
+        return dose_to_volume_cc(dose_gy, mask, param, voxel_cc), "Gy"
+    if metric == "D_%":
+        return dose_to_volume_pct(dose_gy, mask, param), "Gy"
+    if metric == "V_Gy":
+        return volume_above_dose(dose_gy, mask, param, voxel_cc)[1], "%"
+    return 0.0, "-"
+
+
+# ROI 名キーワード → 既定 Clinical Goal (Eclipse の Clinical Goal Template 相当)。
+# (キーワード, 優先度P, 指標, パラメータ, 演算子, Objective, Variation)
+# ※ 累積 EQD2 に対する一般的な文献値 (QUANTEC 等) に基づく**出発点の目安**。
+#   分割・併用療法・再照射の既往・施設基準により調整が必須。
+CLINICAL_GOAL_TEMPLATES: list[tuple] = [
+    ("cord",      1, "D_cc",  0.03, "≤", 45.0, 50.0),
+    ("spinal",    1, "D_cc",  0.03, "≤", 45.0, 50.0),
+    ("myelo",     1, "D_cc",  0.03, "≤", 45.0, 50.0),
+    ("brainstem", 1, "Dmax",  0.0,  "≤", 54.0, 60.0),
+    ("chiasm",    1, "Dmax",  0.0,  "≤", 54.0, 56.0),
+    ("optic",     1, "Dmax",  0.0,  "≤", 54.0, 56.0),
+    ("esophagus", 2, "Dmax",  0.0,  "≤", 60.0, 66.0),
+    ("heart",     2, "Dmean", 0.0,  "≤", 26.0, 30.0),
+    ("lung",      2, "Dmean", 0.0,  "≤", 20.0, 23.0),
+    ("liver",     2, "Dmean", 0.0,  "≤", 30.0, 32.0),
+    ("kidney",    2, "Dmean", 0.0,  "≤", 18.0, 20.0),
+    ("rectum",    2, "V_Gy",  60.0, "≤", 35.0, 40.0),
+    ("bladder",   2, "V_Gy",  65.0, "≤", 50.0, 55.0),
+    ("parotid",   3, "Dmean", 0.0,  "≤", 26.0, 30.0),
+    ("bowel",     2, "Dmax",  0.0,  "≤", 55.0, 60.0),
+    ("stomach",   2, "Dmax",  0.0,  "≤", 54.0, 60.0),
+    # 標的: カバレッジ
+    ("ptv",       1, "D_%",   95.0, "≥", 60.0, 57.0),
+    ("ctv",       1, "D_%",   95.0, "≥", 60.0, 57.0),
+    ("gtv",       1, "D_%",   95.0, "≥", 60.0, 57.0),
+]
+
+
+def default_clinical_goals(roi_names: list[str]) -> list[dict]:
+    """ROI 名から既定の Clinical Goal を提案する (該当しない ROI は Report only)。
+
+    返り値は UI の表に流し込める dict のリスト。値はあくまで**目安**であり、
+    臨床判断は施設基準・症例背景を踏まえて行うこと。
+    """
+    out = []
+    for name in roi_names:
+        low = name.lower()
+        hit = next((t for t in CLINICAL_GOAL_TEMPLATES if t[0] in low), None)
+        if hit:
+            _, p, metric, param, op, obj, var = hit
+        else:
+            p, metric, param, op, obj, var = "R", "Dmax", 0.0, "≤", 0.0, 0.0
+        out.append({"P": p, "Structure": name, "指標": metric, "Param": param,
+                    "演算子": op, "Objective": obj, "Variation": var})
+    return out

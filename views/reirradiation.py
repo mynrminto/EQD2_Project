@@ -15,12 +15,88 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from dose_io import compute_dvh, dvh_metrics, course_contribution_maps  # noqa: E402
+from dose_io import (  # noqa: E402
+    compute_dvh, dvh_metrics, course_contribution_maps,
+    evaluate_goal, default_clinical_goals, GOAL_METRICS,
+)
 from models import ALPHA_BETA_OPTIONS, ALPHA_BETA_HINT, model_picker, eqd2_volume  # noqa: E402
 from ui_theme import apply_theme, page_header, page_help
 import viz  # noqa: E402
 
 COURSE_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#0891b2"]
+
+
+def _judge(actual: float, op: str, obj: float, var: float, priority) -> str:
+    """Eclipse 流の 3 状態判定: Objective 達成 / Variation 内 / 未達。"""
+    if str(priority).upper() == "R":
+        return "— Report"
+    ok = (actual <= obj) if op == "≤" else (actual >= obj)
+    if ok:
+        return "✅ 達成"
+    if var and var > 0:
+        ok_var = (actual <= var) if op == "≤" else (actual >= var)
+        if ok_var:
+            return "⚠️ Variation内"
+    return "❌ 未達"
+
+
+def section_clinical_goals(dose_vol, structures, label: str):
+    """Eclipse の Clinical Goals に準拠した構造別の目標判定。"""
+    st.markdown("---")
+    st.subheader("Clinical Goals")
+    if not (structures and structures.rois):
+        st.info("RTSTRUCT がありません。")
+        return
+    st.caption(f"**{label}** に対する構造別の目標判定 (Eclipse の Clinical Goals 準拠)。"
+               "P=優先度 (1:Most Important 〜 4:Less Important, R:Report only)、"
+               "Objective を満たせば ✅、満たさないが Variation 内なら ⚠️、どちらも外れれば ❌。")
+    st.warning("既定値は QUANTEC 等の一般的な文献値に基づく **出発点の目安** です。"
+               "分割・併用療法・再照射の既往・施設基準により調整が必須で、"
+               "この表のみで臨床判断を行わないでください。", icon="⚠️")
+
+    rois = list(structures.rois.keys())
+    base = pd.DataFrame(default_clinical_goals(rois))
+    ed = st.data_editor(
+        base, hide_index=True, use_container_width=True, key="cg_editor",
+        column_config={
+            "P": st.column_config.SelectboxColumn("P", options=[1, 2, 3, 4, "R"], width="small"),
+            "Structure": st.column_config.TextColumn("Structure", disabled=True),
+            "指標": st.column_config.SelectboxColumn("指標", options=list(GOAL_METRICS.keys()),
+                                                     help=" / ".join(f"{k}={v}" for k, v in GOAL_METRICS.items())),
+            "Param": st.column_config.NumberColumn("Param", min_value=0.0, step=0.01, format="%.2f",
+                                                   help="D_cc→体積(cc), D_%→体積(%), V_Gy→線量(Gy)。Dmax/Dmean では未使用。"),
+            "演算子": st.column_config.SelectboxColumn("演算子", options=["≤", "≥"], width="small"),
+            "Objective": st.column_config.NumberColumn("Objective", min_value=0.0, step=0.1, format="%.2f"),
+            "Variation": st.column_config.NumberColumn("Variation", min_value=0.0, step=0.1, format="%.2f",
+                                                       help="許容変動。0 なら判定に使いません。"),
+        })
+
+    voxel_cc = structures.px_x * structures.px_y * structures.slice_thickness / 1000.0
+    rows, n_ok, n_var, n_ng = [], 0, 0, 0
+    for _, r in ed.iterrows():
+        mask = structures.rois.get(r["Structure"])
+        if mask is None or not mask.any():
+            continue
+        actual, unit = evaluate_goal(dose_vol, mask, str(r["指標"]),
+                                     float(r["Param"]), voxel_cc)
+        verdict = _judge(actual, str(r["演算子"]), float(r["Objective"]),
+                         float(r["Variation"]), r["P"])
+        n_ok += verdict.startswith("✅"); n_var += verdict.startswith("⚠️"); n_ng += verdict.startswith("❌")
+        m = str(r["指標"])
+        obj_txt = (f"{m} {r['演算子']} {float(r['Objective']):.2f} {unit}" if m in ("Dmax", "Dmean")
+                   else f"{m}({float(r['Param']):g}) {r['演算子']} {float(r['Objective']):.2f} {unit}")
+        rows.append({"P": r["P"], "Structure": r["Structure"], "Objective": obj_txt,
+                     "Variation": f"{r['演算子']} {float(r['Variation']):.2f} {unit}"
+                                  if float(r["Variation"]) > 0 else "—",
+                     "実測": f"{actual:.2f} {unit}", "判定": verdict})
+    if not rows:
+        st.info("評価可能な ROI がありません。")
+        return
+    m = st.columns(3)
+    m[0].metric("✅ 達成", n_ok)
+    m[1].metric("⚠️ Variation内", n_var)
+    m[2].metric("❌ 未達", n_ng)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 def tab_plan_sum(ct, structures, rd_names, model, params, ab):
@@ -136,6 +212,8 @@ def tab_plan_sum(ct, structures, rd_names, model, params, ab):
                           paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                           margin=dict(t=20, b=20, l=20, r=20))
         st.plotly_chart(fig, use_container_width=True)
+
+    section_clinical_goals(plan_sum, structures, f"Σ Plan Sum (累積 EQD2, α/β={ab})")
 
 
 def tab_contribution(ct, structures, rd_names, model, params, ab):
